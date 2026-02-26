@@ -1,0 +1,10 @@
+.vscode/
+
+build/
+.cache/
+
+pcl
+*.o
+*.output
+
+compile_commands.json
