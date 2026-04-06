@@ -104,9 +104,9 @@ ESC \\([ntr0\\\'\"])
 [\=\>\<\+\-\*\/\^\@\;\.\(\)\:\,\[\]]    { return yytext[0]; }
 
 {L}({L}|{D}|_)*                 { return T_id; }
-0*{D}+                          { return T_cint; }
+{D}+                          { return T_cint; }
 {D}+\.{D}+([eE][\+\-]?{D}+)?    { return T_re; }
-'([^\"\'\\]|{ESC})'             { return T_cchar; }
+'([^\'\\]|{ESC})'             { return T_cchar; }
 \"([^\"\\\n]|{ESC})*\"             { return T_str; }
 {W}+                            { /*nothing*/ }
 
