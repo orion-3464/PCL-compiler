@@ -3,7 +3,7 @@
 }
 
 %{
-    #define T_eof   0
+#define T_eof   0
     #define T_and   1001
     #define T_array 1002
     #define T_begin 1003
@@ -46,7 +46,7 @@
     #define T_neq   1038
     #define T_geq   1039
     #define T_leq   1040
-    #define T_asgn  1041
+#define T_asgn 1041
 %}
 
 %x COMMENT
@@ -104,19 +104,18 @@ ESC \\([ntr0\\\'\"])
 [\=\>\<\+\-\*\/\^\@\;\.\(\)\:\,\[\]]    { return yytext[0]; }
 
 {L}({L}|{D}|_)*                 { return T_id; }
-{D}+                          { return T_cint; }
+{D}+                            { return T_cint; }
 {D}+\.{D}+([eE][\+\-]?{D}+)?    { return T_re; }
-'([^\'\\]|{ESC})'             { return T_cchar; }
-\"([^\"\\\n]|{ESC})*\"             { return T_str; }
+'([^\'\\]|{ESC})'               { return T_cchar; }
+\"([^\"\\\n]|{ESC})*\"          { return T_str; }
 {W}+                            { /*nothing*/ }
 
 "(*"                { BEGIN(COMMENT); }
 <COMMENT>"*)"       { BEGIN(INITIAL); }
-<COMMENT>\n         { /* newlines are handled by yylineno */ }
-<COMMENT>.          { /* ignore any other character inside the comment */ }
+<COMMENT>(.|\n)
 <COMMENT><<EOF>>    { fprintf(stderr, "Error: Unclosed comment\n"); exit(1); }
 
-. { fprintf(stderr, "illegal character\n"); exit(1); }
+. { fprintf(stderr, "illegal character '%c' (ASCII: %d)\n", yytext[0], yytext[0]); exit(1); }
 
 %%
 
@@ -126,5 +125,6 @@ int main() {
         token = yylex();
         printf("token=%d, lexeme=\"%s\"\n", token, yytext);
     } while (token != T_eof);
+    printf("Number of lines:%d\n", yylineno);
     return 0;
 }

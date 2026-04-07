@@ -1,4 +1,4 @@
-CC := gcc
+CC := g++
 CFLAGS := -g -Wall -Wextra -std=c++23
 BUILD_DIR := ./build
 
