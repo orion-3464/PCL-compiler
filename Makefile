@@ -1,16 +1,31 @@
-CC := g++
-CFLAGS := -g -Wall -Wextra -std=c++23
-BUILD_DIR := ./build
+.PHONY: clean distclean default
 
-lexer: lexer.cpp
-	$(CC) $(CFLAGS) -o $@ $(BUILD_DIR)/lexer.cpp && mv $@ $(BUILD_DIR)
+CXX := g++
+CXXFLAGS := -g -Wall -Wextra -std=c++23 -o3
+BUILD := build
 
-lexer.cpp: $(BUILD_DIR)
-	flex -s src/lexer.l && mv $@ $(BUILD_DIR) 
+default: pcl
 
-$(BUILD_DIR):
-	mkdir $@
+pcl: $(BUILD)/parser.o $(BUILD)/lexer.o
+	$(CXX) $(CXXFLAGS) -o $@ $^
 
-.PHONY: clean
+$(BUILD)/parser.o: $(BUILD)/parser.cpp $(BUILD)/parser.hpp src/lexer.hpp
+	$(CXX) $(CXXFLAGS) -c -I./src $< -o $@
+
+$(BUILD)/lexer.o: $(BUILD)/lexer.cpp src/lexer.hpp
+	$(CXX) $(CXXFLAGS) -c -I./src $< -o $@
+
+$(BUILD)/parser.cpp $(BUILD)/parser.hpp: src/parser.y | $(BUILD)
+	bison -dv -o parser.cpp $< && mv parser* $(BUILD)
+
+$(BUILD)/lexer.cpp: src/lexer.l | $(BUILD)
+	flex -s $< && mv lexer.cpp $(BUILD)
+
+$(BUILD):
+	mkdir -p $(BUILD)
+
 clean:
-	rm -rf build/
+	rm -rf $(BUILD)
+
+distclean: clean
+	rm -f pcl

@@ -3,50 +3,9 @@
 }
 
 %{
+#include "lexer.hpp"
+#include "parser.hpp" 
 #define T_eof   0
-    #define T_and   1001
-    #define T_array 1002
-    #define T_begin 1003
-    #define T_bool  1004
-    #define T_char  1005
-    #define T_disp  1006
-    #define T_div   1007
-    #define T_do    1008
-    #define T_else  1009
-    #define T_end   1010
-    #define T_false 1011
-    #define T_forw  1012
-    #define T_func  1013
-    #define T_goto  1014
-    #define T_if    1015
-    #define T_int   1016
-    #define T_label 1017
-    #define T_mod   1018
-    #define T_new   1019
-    #define T_nil   1020
-    #define T_not   1021
-    #define T_of    1022
-    #define T_or    1023
-    #define T_proc  1024
-    #define T_prog  1025
-    #define T_real  1026
-    #define T_res   1027
-    #define T_ret   1028
-    #define T_then  1029
-    #define T_true  1030
-    #define T_var   1031
-    #define T_while 1032
-
-    #define T_id    1033
-    #define T_cint  1034
-    #define T_re    1035
-    #define T_cchar 1036
-    #define T_str   1037
-
-    #define T_neq   1038
-    #define T_geq   1039
-    #define T_leq   1040
-#define T_asgn 1041
 %}
 
 %x COMMENT
@@ -115,10 +74,10 @@ ESC \\([ntr0\\\'\"])
 <COMMENT>(.|\n)
 <COMMENT><<EOF>>    { fprintf(stderr, "Error: Unclosed comment\n"); exit(1); }
 
-. { fprintf(stderr, "illegal character '%c' (ASCII: %d)\n", yytext[0], yytext[0]); exit(1); }
+. { fprintf(stderr, "illegal character '%c' (ASCII: %d) in line %d\n", yytext[0], yytext[0], yylineno); exit(1); }
 
 %%
-
+/*
 int main() {
     int token;
     do {
@@ -128,3 +87,4 @@ int main() {
     printf("Number of lines:%d\n", yylineno);
     return 0;
 }
+*/
