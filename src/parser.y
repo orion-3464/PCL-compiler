@@ -1,8 +1,17 @@
-%{
-#include <cstdio>
-#include <cstdlib>
-#include "lexer.hpp"
-%}
+%code top {
+    #include <cstdio>
+    #include <cstdlib>
+}
+
+%code requires {
+    #include "lexer.hpp"
+}
+
+%code {
+
+}
+
+%locations
 
 %token T_and   "and"
 %token T_array "array"

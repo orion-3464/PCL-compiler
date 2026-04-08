@@ -15,7 +15,6 @@ D   [0-9]
 W   [ \t\n\r]
 ESC \\([ntr0\\\'\"])
 
-%option outfile="lexer.cpp"
 %option noyywrap
 %option yylineno
 %option nodefault
