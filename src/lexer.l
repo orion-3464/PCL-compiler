@@ -11,23 +11,27 @@
 %option warn
 %option header-file="./build/lexer.hpp"
 
-
 %{
 #include <iostream>
 #include <string>
 
 static yy::location loc;
+
+#define YY_USER_ACTION loc.columns(yyleng);
 %}
 
 %x COMMENT
 
 L   [a-zA-Z]
 D   [0-9]
-W   [ \t\n\r]
+W   [ \t\r]
 ESC \\([ntr0\\\'\"])
 
-
 %%
+
+%{
+loc.step();
+%}
 
 "and"       { return yy::parser::make_and(loc); }
 "array"     { return yy::parser::make_array(loc); }
@@ -69,24 +73,36 @@ ESC \\([ntr0\\\'\"])
 
 [\=\>\<\+\-\*\/\^\@\;\.\(\)\:\,\[\]]    { return yy::parser::symbol_type(yytext[0], loc); }
 
-{L}({L}|{D}|_)*                 { //std::string s(yytext);
-                                  //return yy::parser::make_id(s, loc);
-                                  return yy::parser::make_id(loc);
+{L}({L}|{D}|_)*                 { std::string s(yytext);
+                                  return yy::parser::make_id(s, loc);
                                 }
-{D}+                            { //return yy::parser::make_cint(atoi(yytext), loc);
-                                  return yy::parser::make_cint(loc);
+{D}+                            { char *end;
+                                  unsigned long x = std::strtoul(yytext, &end, 10);
+                                  if (*end != '\0') {
+                                      std::cerr << "\033[91mError: Illegal integer constant\n"
+                                                << std::endl;
+                                      std::exit(1);
+                                  }
+                                  return yy::parser::make_cint(x, loc);
                                 }
-{D}+\.{D}+([eE][\+\-]?{D}+)?    { return yy::parser::make_re(loc); }
-'([^\'\\]|{ESC})'               { return yy::parser::make_cchar(loc); }
-\"([^\"\\\n]|{ESC})*\"          { return yy::parser::make_str(loc); }
-{W}+                            { /*nothing*/ }
+{D}+\.{D}+([eE][\+\-]?{D}+)?    { std::string s(yytext);
+                                  return yy::parser::make_re(std::stod(s), loc);
+                                }
+'([^\'\\]|{ESC})'               { return yy::parser::make_cchar(yytext[1], loc); }
+\"([^\"\\\n]|{ESC})*\"          { std::string s(yytext);
+                                  return yy::parser::make_str(s, loc);
+                                }
+{W}+                            { loc.step(); }
+\n+                             { loc.lines(yyleng); loc.step(); } 
 
 "(*"                { BEGIN(COMMENT); }
 <COMMENT>"*)"       { BEGIN(INITIAL); }
 <COMMENT>(.|\n)
-<COMMENT><<EOF>>    { std::cerr << "\033[91mError: Unclosed comment\n"
+<COMMENT><<EOF>>    { std::cerr << "\033[91mError: Unclosed comment" << std::endl 
+                                << "Line: " << loc.begin.line << "\033[0m"
                                 << std::endl;
-                      std::exit(1); }
+                      std::exit(1);
+                    }
 
 . { std::cerr << "\033[91mIllegal character '" << yytext[0]
               << "' at line " << loc.begin.line << "\033[0m"
@@ -97,15 +113,3 @@ ESC \\([ntr0\\\'\"])
 <<EOF>>    { return yy::parser::make_YYEOF(loc); }
 
 %%
-/*
-int main() {
-    int token;
-    do {
-        token = yylex();
-        printf("token=%d, lexeme=\"%s\"\n", token, yytext);
-    } while (token != T_eof);
-    printf("Number of lines:%d\n", yylineno);
-    return 0;
-}
-*/
-

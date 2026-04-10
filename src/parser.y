@@ -5,18 +5,21 @@
 %define api.location.file "location.hpp"
 
 %code top {
-    #include <cstdio>
-    #include <cstdlib>
+    #include <iostream>
+    #include <string>
+    #include <memory>
 }
 
 %code requires {
-    
     #include "ast.hpp"
 }
 
 %code {
     #include "lexer.hpp"
     YY_DECL;
+
+    extern FILE *yyin;
+    extern void yyrestart(FILE *inp);
 }
 
 %define api.value.type variant
@@ -59,11 +62,11 @@
 %token var   "var"
 %token while "while"
                         
-%token id    
-%token cint  
-%token re    
-%token cchar 
-%token str
+%token<std::string> id    
+%token<unsigned long> cint  
+%token<double> re    
+%token<char> cchar 
+%token<std::string> str
 
 %token neq  "<>" 
 %token geq  ">=" 
@@ -226,7 +229,6 @@ expr:
 |   expr ">=" expr
 ;
 
-
 call:
     id '(' args ')'
 ;
@@ -249,19 +251,26 @@ void yy::parser::error(const location_type& l, const std::string& m) {
   std::exit(1);
 }
 
-int main() {
-    return 0;
-}
+int main(int argc, char **argv) {
+    if (argc > 1) {
+        FILE *file = fopen(argv[1], "r");
+        if (!file) {
+            std::cerr << "\033[91mError: Could not open file "
+                      << argv[1] << "\033[0m"
+                      << std::endl;
+            return 1;
+        }
+        yyin = file;
+        yyrestart(yyin); 
+    }
 
-     /*
-void yyerror(const char *msg) {
-    fprintf(stderr, "Error: %s\n", msg);
-    exit(1);
-}
+    yy::parser p;
+    int result = p.parse();
     
-int main() {
-    int result = yyparse();
-    if (result == 0) printf("Success\n");
+    if (result == 0) {
+        std::cout << "\033[31;42mSuccess: File completely parsed!"
+                  << "\033[0m" << std::endl;
+    }
+    
     return result;
 }
-     */

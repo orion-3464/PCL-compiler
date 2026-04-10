@@ -16,13 +16,14 @@ TOTAL=0
 for file in "$TEST_DIR"/*.pcl; do
     ((TOTAL++))
     filename=$(basename "$file")
+    OUTPUT=$("$PARSER" "$file" 2>&1)
+    EXIT_CODE=$?
     
-    STATUS="$($PARSER < $file)"
-    if [ "$STATUS" == "Success" ]; then
-        echo -e "FILE:$(basename $file) -> PARSING STATUS: ${GREEN}$STATUS${NC}\n"
+    if [ $EXIT_CODE -eq 0 ]; then
+        echo -e "FILE:$(basename $file) -> PARSING STATUS: ${GREEN}SUCCESS${NC}\n"
         ((PASSED++))
     else
-        echo -e "FILE:$(basename $file) -> PARSING STATUS: ${RED}$STATUS${NC}\n"
+        echo -e "FILE:$(basename $file) -> PARSING STATUS: ${RED}FAILED${NC}\n"
         ((FAILED++))
     fi
 done
