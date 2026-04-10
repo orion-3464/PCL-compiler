@@ -1,11 +1,22 @@
 %top{
-    // Include files here
+#include "parser.hpp"
+
+#define YY_DECL yy::parser::symbol_type yylex()
 }
 
+%option noyywrap
+%option yylineno
+%option nodefault
+%option nounput
+%option warn
+%option header-file="./build/lexer.hpp"
+
+
 %{
-#include "lexer.hpp"
-#include "parser.hpp" 
-#define T_eof   0
+#include <iostream>
+#include <string>
+
+static yy::location loc;
 %}
 
 %x COMMENT
@@ -15,65 +26,75 @@ D   [0-9]
 W   [ \t\n\r]
 ESC \\([ntr0\\\'\"])
 
-%option noyywrap
-%option yylineno
-%option nodefault
 
 %%
 
-"and"       { return T_and; }
-"array"     { return T_array; }
-"begin"     { return T_begin; }
-"boolean"   { return T_bool; }
-"char"      { return T_char; }
-"dispose"   { return T_disp; }
-"div"       { return T_div; }
-"do"        { return T_do; }
-"else"      { return T_else; }
-"end"       { return T_end; }
-"false"     { return T_false; }
-"forward"   { return T_forw; }
-"function"  { return T_func; }
-"goto"      { return T_goto; }
-"if"        { return T_if; }
-"integer"   { return T_int; }
-"label"     { return T_label; }
-"mod"       { return T_mod; }
-"new"       { return T_new; }
-"nil"       { return T_nil; }
-"not"       { return T_not; }
-"of"        { return T_of; }
-"or"        { return T_or; }
-"procedure" { return T_proc; }
-"program"   { return T_prog; }
-"real"      { return T_real; }
-"result"    { return T_res; }
-"return"    { return T_ret; }
-"then"      { return T_then; }
-"true"      { return T_true; }
-"var"       { return T_var; }
-"while"     { return T_while; }
+"and"       { return yy::parser::make_and(loc); }
+"array"     { return yy::parser::make_array(loc); }
+"begin"     { return yy::parser::make_begin(loc); }
+"boolean"   { return yy::parser::make_bool(loc); }
+"char"      { return yy::parser::make_char(loc); }
+"dispose"   { return yy::parser::make_disp(loc); }
+"div"       { return yy::parser::make_div(loc); }
+"do"        { return yy::parser::make_do(loc); }
+"else"      { return yy::parser::make_else(loc); }
+"end"       { return yy::parser::make_end(loc); }
+"false"     { return yy::parser::make_false(loc); }
+"forward"   { return yy::parser::make_forw(loc); }
+"function"  { return yy::parser::make_func(loc); }
+"goto"      { return yy::parser::make_goto(loc); }
+"if"        { return yy::parser::make_if(loc); }
+"integer"   { return yy::parser::make_int(loc); }
+"label"     { return yy::parser::make_label(loc); }
+"mod"       { return yy::parser::make_mod(loc); }
+"new"       { return yy::parser::make_new(loc); }
+"nil"       { return yy::parser::make_nil(loc); }
+"not"       { return yy::parser::make_not(loc); }
+"of"        { return yy::parser::make_of(loc); }
+"or"        { return yy::parser::make_or(loc); }
+"procedure" { return yy::parser::make_proc(loc); }
+"program"   { return yy::parser::make_prog(loc); }
+"real"      { return yy::parser::make_real(loc); }
+"result"    { return yy::parser::make_res(loc); }
+"return"    { return yy::parser::make_ret(loc); }
+"then"      { return yy::parser::make_then(loc); }
+"true"      { return yy::parser::make_true(loc); }
+"var"       { return yy::parser::make_var(loc); }
+"while"     { return yy::parser::make_while(loc); }
 
-"<>"        { return T_neq; }
-">="        { return T_geq; }
-"<="        { return T_leq; }
-":="        { return T_asgn; }
+"<>"        { return yy::parser::make_neq(loc); }
+">="        { return yy::parser::make_geq(loc); }
+"<="        { return yy::parser::make_leq(loc); }
+":="        { return yy::parser::make_asgn(loc); }
 
-[\=\>\<\+\-\*\/\^\@\;\.\(\)\:\,\[\]]    { return yytext[0]; }
+[\=\>\<\+\-\*\/\^\@\;\.\(\)\:\,\[\]]    { return yy::parser::symbol_type(yytext[0], loc); }
 
-{L}({L}|{D}|_)*                 { return T_id; }
-{D}+                            { return T_cint; }
-{D}+\.{D}+([eE][\+\-]?{D}+)?    { return T_re; }
-'([^\'\\]|{ESC})'               { return T_cchar; }
-\"([^\"\\\n]|{ESC})*\"          { return T_str; }
+{L}({L}|{D}|_)*                 { //std::string s(yytext);
+                                  //return yy::parser::make_id(s, loc);
+                                  return yy::parser::make_id(loc);
+                                }
+{D}+                            { //return yy::parser::make_cint(atoi(yytext), loc);
+                                  return yy::parser::make_cint(loc);
+                                }
+{D}+\.{D}+([eE][\+\-]?{D}+)?    { return yy::parser::make_re(loc); }
+'([^\'\\]|{ESC})'               { return yy::parser::make_cchar(loc); }
+\"([^\"\\\n]|{ESC})*\"          { return yy::parser::make_str(loc); }
 {W}+                            { /*nothing*/ }
 
 "(*"                { BEGIN(COMMENT); }
 <COMMENT>"*)"       { BEGIN(INITIAL); }
 <COMMENT>(.|\n)
-<COMMENT><<EOF>>    { fprintf(stderr, "Error: Unclosed comment\n"); exit(1); }
+<COMMENT><<EOF>>    { std::cerr << "\033[91mError: Unclosed comment\n"
+                                << std::endl;
+                      std::exit(1); }
 
-. { fprintf(stderr, "illegal character '%c' (ASCII: %d) in line %d\n", yytext[0], yytext[0], yylineno); exit(1); }
+. { std::cerr << "\033[91mIllegal character '" << yytext[0]
+              << "' at line " << loc.begin.line << "\033[0m"
+              << std::endl;
+    std::exit(1);
+  }
+
+<<EOF>>    { return yy::parser::make_YYEOF(loc); }
 
 %%
 /*
@@ -87,3 +108,4 @@ int main() {
     return 0;
 }
 */
+

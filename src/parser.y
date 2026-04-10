@@ -1,61 +1,74 @@
+%require "3.8"
+%language "c++"
+%locations
+%verbose
+%define api.location.file "location.hpp"
+
 %code top {
     #include <cstdio>
     #include <cstdlib>
 }
 
 %code requires {
-    #include "lexer.hpp"
+    
+    #include "ast.hpp"
 }
 
 %code {
-
+    #include "lexer.hpp"
+    YY_DECL;
 }
 
-%locations
+%define api.value.type variant
+%define api.token.constructor
+/*%define api.value.automove*/
+%define parse.assert
+%define parse.error verbose
+%define api.token.prefix {T_}
 
-%token T_and   "and"
-%token T_array "array"
-%token T_begin "begin"
-%token T_bool  "boolean"
-%token T_char  "char"
-%token T_disp  "dispose"
-%token T_div   "div"
-%token T_do    "do"
-%token T_else  "else"
-%token T_end   "end"
-%token T_false "false"
-%token T_forw  "forward"
-%token T_func  "function"
-%token T_goto  "goto"
-%token T_if    "if"
-%token T_int   "integer"
-%token T_label "label"
-%token T_mod   "mod"
-%token T_new   "new"
-%token T_nil   "nil"
-%token T_not   "not"
-%token T_of    "of"
-%token T_or    "or"
-%token T_proc  "procedure"
-%token T_prog  "program"
-%token T_real  "real"
-%token T_res   "result"
-%token T_ret   "return"
-%token T_then  "then"
-%token T_true  "true"
-%token T_var   "var"
-%token T_while "while"
+%token and   "and"
+%token array "array"
+%token begin "begin"
+%token bool  "boolean"
+%token char  "char"
+%token disp  "dispose"
+%token div   "div"
+%token do    "do"
+%token else  "else"
+%token end   "end"
+%token false "false"
+%token forw  "forward"
+%token func  "function"
+%token goto  "goto"
+%token if    "if"
+%token int   "integer"
+%token label "label"
+%token mod   "mod"
+%token new   "new"
+%token nil   "nil"
+%token not   "not"
+%token of    "of"
+%token or    "or"
+%token proc  "procedure"
+%token prog  "program"
+%token real  "real"
+%token res   "result"
+%token ret   "return"
+%token then  "then"
+%token true  "true"
+%token var   "var"
+%token while "while"
                         
-%token T_id    
-%token T_cint  
-%token T_re    
-%token T_cchar 
-%token T_str
+%token id    
+%token cint  
+%token re    
+%token cchar 
+%token str
 
-%token T_neq  "<>" 
-%token T_geq  ">=" 
-%token T_leq  "<=" 
-%token T_asgn ":="
+%token neq  "<>" 
+%token geq  ">=" 
+%token leq  "<=" 
+%token asgn ":="
 
 %nonassoc '=' '>' '<' "<=" ">=" "<>"
 %left '+' '-' "or"
@@ -66,11 +79,11 @@
 %precedence '['
 
 %expect 1 /* dangling else */
-    
+   
 %%
 
 program:
-    "program" T_id ';' body '.'
+    "program" id ';' body '.'
 ;
 
 body:
@@ -84,7 +97,7 @@ locals:
 
 local:
     "var" definitions
-|   "label" T_id ids ';'
+|   "label" id ids ';'
 |   header ';' body ';'
 |   "forward" header ';'
 ;
@@ -95,17 +108,17 @@ definitions:
 ;
 
 definition:
-    T_id ids ':' type ';'
+    id ids ':' type ';'
 ;
 
 ids:
     %empty
-|   ids ',' T_id
+|   ids ',' id
 ;
 
 header:
-    "procedure" T_id '(' parameters ')' /* parameters are optional */
-|   "function" T_id '(' parameters ')' ':' type
+    "procedure" id '(' parameters ')' /* parameters are optional */
+|   "function" id '(' parameters ')' ':' type
 ;
 
 parameters:
@@ -119,7 +132,7 @@ formals:
 ;
 
 formal:
-    opvar T_id ids ':' type
+    opvar id ids ':' type
 ;
 
 opvar:
@@ -138,7 +151,7 @@ type:
 
 size:
     %empty
-|   '[' T_cint ']'
+|   '[' cint ']'
 ;
 
 block:
@@ -157,8 +170,8 @@ stmt:
 |   call
 |   "if" expr "then" stmt elseop
 |   "while" expr "do" stmt
-|   T_id ':' stmt
-|   "goto" T_id
+|   id ':' stmt
+|   "goto" id
 |   "return"
 |   "new" exprop expr
 |   "dispose" brackop expr
@@ -180,17 +193,17 @@ brackop:
 ;
 
 expr:
-    T_id
+    id
 |   "result"
-|   T_str
+|   str
 |   expr '[' expr ']'
 |   expr '^'              %prec '^'
 |   '(' expr ')'
-|   T_cint
+|   cint
 |   "true"
 |   "false"
-|   T_re
-|   T_cchar
+|   re
+|   cchar
 |   "nil"
 |   call
 |   '@' expr              %prec '@'
@@ -215,7 +228,7 @@ expr:
 
 
 call:
-    T_id '(' args ')'
+    id '(' args ')'
 ;
 
 args:
@@ -230,6 +243,17 @@ exprs:
 
 %%
 
+void yy::parser::error(const location_type& l, const std::string& m) {
+  std::cerr << "\033[91mError: " << m << " at line "
+            << l.begin.line << "\033[0m" << std::endl;
+  std::exit(1);
+}
+
+int main() {
+    return 0;
+}
+
+     /*
 void yyerror(const char *msg) {
     fprintf(stderr, "Error: %s\n", msg);
     exit(1);
@@ -240,3 +264,4 @@ int main() {
     if (result == 0) printf("Success\n");
     return result;
 }
+     */
