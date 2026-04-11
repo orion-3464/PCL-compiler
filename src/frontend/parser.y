@@ -17,9 +17,6 @@
 %code {
     #include "lexer.hpp"
     YY_DECL;
-
-    extern FILE *yyin;
-    extern void yyrestart(FILE *inp);
 }
 
 %define api.value.type variant
@@ -249,28 +246,4 @@ void yy::parser::error(const location_type& l, const std::string& m) {
   std::cerr << "\033[91mError: " << m << " at line "
             << l.begin.line << "\033[0m" << std::endl;
   std::exit(1);
-}
-
-int main(int argc, char **argv) {
-    if (argc > 1) {
-        FILE *file = fopen(argv[1], "r");
-        if (!file) {
-            std::cerr << "\033[91mError: Could not open file "
-                      << argv[1] << "\033[0m"
-                      << std::endl;
-            return 1;
-        }
-        yyin = file;
-        yyrestart(yyin); 
-    }
-
-    yy::parser p;
-    int result = p.parse();
-    
-    if (result == 0) {
-        std::cout << "\033[31;42mSuccess: File completely parsed!"
-                  << "\033[0m" << std::endl;
-    }
-    
-    return result;
 }

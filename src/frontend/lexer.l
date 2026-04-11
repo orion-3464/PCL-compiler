@@ -10,10 +10,13 @@
 %option nounput
 %option warn
 %option header-file="./build/lexer.hpp"
+%option outfile="./build/lexer.cpp"
 
 %{
 #include <iostream>
 #include <string>
+#include <cerrno>
+#include <cstdlib>
 
 static yy::location loc;
 
@@ -77,8 +80,14 @@ loc.step();
                                   return yy::parser::make_id(s, loc);
                                 }
 {D}+                            { char *end;
+                                  errno = 0;
                                   unsigned long x = std::strtoul(yytext, &end, 10);
-                                  if (*end != '\0') {
+                                  if(errno == ERANGE) {
+                                      std::cerr << "\033[91mError: Integer constant is too large\n"
+                                                << "Line: " << loc.begin.line << "\033[0m\n";
+                                      std::exit(1);
+                                  }
+                                  if(*end != '\0') {
                                       std::cerr << "\033[91mError: Illegal integer constant\n"
                                                 << std::endl;
                                       std::exit(1);
@@ -92,6 +101,11 @@ loc.step();
 \"([^\"\\\n]|{ESC})*\"          { std::string s(yytext);
                                   return yy::parser::make_str(s, loc);
                                 }
+\"([^\"\\\n]|{ESC})*            { std::cerr << "\033[91mError: Unterminated string\033[0m"
+                                            << std::endl;
+                                  std::exit(1);
+                                }
+
 {W}+                            { loc.step(); }
 \n+                             { loc.lines(yyleng); loc.step(); } 
 
