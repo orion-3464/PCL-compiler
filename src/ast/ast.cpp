@@ -2,6 +2,35 @@
 #include <memory>
 #include <ostream>
 
+std::string to_string(BinOp op) {
+    switch(op) {
+        case BinOp::Add:    return "+";
+        case BinOp::Sub:    return "-";
+        case BinOp::Mul:    return "*";
+        case BinOp::Div:    return "/";
+        case BinOp::IntDiv: return "div";
+        case BinOp::Mod:    return "mod";
+        case BinOp::And:    return "and";
+        case BinOp::Or:     return "or";
+        case BinOp::Eq:     return "=";
+        case BinOp::Neq:    return "<>";
+        case BinOp::Lt:     return "<";
+        case BinOp::Le:     return "<=";
+        case BinOp::Gt:     return ">";
+        case BinOp::Ge:     return ">=";
+        default:            return "unknown";
+    }
+}
+
+std::string to_string(UnOp op) {
+    switch(op) {
+        case UnOp::Not: return "not";
+        case UnOp::Plus: return "+";
+        case UnOp::Minus: return "-";
+        default: return "unknown";
+    }
+}
+
 /* ==================== Block ==================== */
 
 void Block::append(std::unique_ptr<Stmt> s)  {
@@ -147,32 +176,39 @@ void Ref::printNode(std::ostream& out) const {
 /* ==================== Unop ==================== */
 
 void Unop::printNode(std::ostream& out) const {
-    out << "Unop( " << op << ", " << *expr << " )";
+    out << "Unop( " << to_string(op) << ", " << *expr << " )";
 }
 
 /* ==================== Binop ==================== */
 
 void Binop::printNode(std::ostream& out) const {
-    out << "Binop( " << op << " | "
-        << *left << " | " << *right
-        <<" )";
+    out << "Binop( " << to_string(op) << " | "
+        << *left << " | " << *right << " )";
 }
 
 /* ==================== CallProc ==================== */
 
 void CallProc::printNode(std::ostream& out) const {
-    out << "CallProc( name: " << name
-        << " args: ";
-    for(const auto& a : args) out << *a;
+    out << "CallProc( name : " << name << " args: ";
+    bool first = true;
+    for (const auto &a : args) {
+        if(!first) out << ", ";
+        out << *a;
+        first = false;
+    }
     out << " )";
 }
 
 /* ==================== CallFunc ==================== */
 
 void CallFunc::printNode(std::ostream& out) const {
-    out << "CallFunc( name: " << name
-        << " args: ";
-    for(const auto& a : args) out << *a;
+    out << "CallFunc( name : " << name << " args: ";
+    bool first = true;
+    for (const auto &a : args) {
+        if(!first) out << ", ";
+        out << *a;
+        first = false;
+    }
     out << " )";
 }
 
@@ -233,4 +269,72 @@ bool PointerType::isArithmetic() const {
 
 void PointerType::printNode(std::ostream& out) const {
     out << "PointerType( element type: " << *target << " )";
+}
+
+
+/* ==================== Body ==================== */
+
+void Body::printNode(std::ostream& out) const  {
+    out << "Body(\n";
+    for (const auto& local : locals) {
+        out << "  " << *local << "\n";
+    }
+    out << "  " << *block << "\n)";
+}
+
+/* ==================== Var ==================== */
+
+void Var::printNode(std::ostream& out) const {
+    out << "Var( names: ";
+    for(const auto& i : ids)
+        out << i << ", ";
+    out << "type: " << *type << " )";
+}
+
+/* ==================== LabelDef ==================== */
+
+void LabelDef::printNode(std::ostream& out) const {
+    out << "LabelDef( names: ";
+    bool first = true;
+    for(const auto& i : ids) {
+        if(!first) out << ", ";
+        out << i;
+        first = false;
+    }
+    out << " )";
+}
+
+/* ==================== Formal ==================== */
+
+void Formal::printNode(std::ostream& out) const  {
+    out << "Formal( ";
+    if (is_reference) out << "var ";
+    for (const auto& id : ids) out << id << " ";
+    out << ": " << *type << " )";
+}
+
+/* ==================== RoutineDef ==================== */
+
+void RoutineDef::printNode(std::ostream& out) const {
+    (return_type) ? out << "FunctionDef( " << name << " (" 
+        : out << "ProcedureDef( " << name << " (";
+ 
+    bool first = true;
+    for (const auto& f : formals) {
+        if (!first) out << "; ";
+        out << *f;
+        first = false;
+    }
+    out << ") ";
+    
+    if (return_type) out << ": " << *return_type << " ";
+
+    (body) ? out << "\n" << *body << "\n)"
+        : out << " [forward] )"; 
+}
+
+/* ==================== Program ==================== */
+
+void Program::printNode(std::ostream& out) const {
+    out << "Program( " << name << "\n" << *body << "\n)";
 }

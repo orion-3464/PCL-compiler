@@ -204,11 +204,11 @@ private:
 
 class Bool : public Rvalue {
 public:
-    Bool(std::string v, Loc l) : Rvalue(l), val(v) {}
+    Bool(bool v, Loc l) : Rvalue(l), val(v) {}
 
     void printNode(std::ostream& out) const override;
 private:
-    std::string val;
+    bool val;
 };
 
 class Real : public Rvalue {
@@ -245,21 +245,38 @@ private:
     std::unique_ptr<Expr> left_value;
 };
 
+enum class BinOp {
+    Add, Sub, Mul,   
+    Div, IntDiv, Mod,    
+    And, Or,     
+    Eq,  Neq,    
+    Lt,  Le, Gt, Ge     
+};
+
+enum class UnOp {
+    Not,    
+    Plus,
+    Minus
+};
+
+std::string to_string(BinOp op);
+std::string to_string(UnOp op);
+
 class Unop : public Rvalue {
 public:
-    Unop(std::string o, std::unique_ptr<Expr> e, Loc l)
+    Unop(UnOp o, std::unique_ptr<Expr> e, Loc l)
         : Rvalue(l), op(o), expr(std::move(e)) {}
 
     void printNode(std::ostream& out) const override;
 private:
-    std::string op;
+    UnOp op;
     std::unique_ptr<Expr> expr;
 };
 
 class Binop : public Rvalue {
 public:
     Binop(std::unique_ptr<Expr> le,
-          std::string o,
+          BinOp o,
           std::unique_ptr<Expr> re,
           Loc l)
         : Rvalue(l), left(std::move(le)), op(o), right(std::move(re)) {}
@@ -267,7 +284,7 @@ public:
     void printNode(std::ostream& out) const override;
 private:
     std::unique_ptr<Expr> left;
-    std::string op;
+    BinOp op;
     std::unique_ptr<Expr> right;
 };
 
@@ -283,11 +300,11 @@ private:
     std::vector<std::unique_ptr<Expr>> args;
 };
 
-class CallFunc : public Expr {
+class CallFunc : public Rvalue {
 public:
     CallFunc(std::string n,
              std::vector<std::unique_ptr<Expr>> a,
-             Loc l) : Expr(l), name(n), args(std::move(a)) {}
+             Loc l) : Rvalue(l), name(n), args(std::move(a)) {}
 
     void printNode(std::ostream& out) const override;
 private:
@@ -326,7 +343,7 @@ public:
     bool isArithmetic() const override;
     void printNode(std::ostream& out) const override;
 private:
-    int size; 
+    int size; // Negative for incomplete types 
     std::unique_ptr<Type> element_type;
 };
 
@@ -344,12 +361,88 @@ private:
 };
 
 class Local : public AST {
+public:
     Local(Loc l) : AST(l) {} 
 };
 
-
 class Body : public AST {
+public:
+    Body(std::vector<std::unique_ptr<Local>> locs,
+         std::unique_ptr<Block> blk,
+         Loc l)
+        : AST(l), locals(std::move(locs)), block(std::move(blk)) {}
+
+    void printNode(std::ostream& out) const override;
+private:
+    std::vector<std::unique_ptr<Local>> locals;
+    std::unique_ptr<Block> block;
 };
 
+class Var : public Local {
+public:
+    Var(std::vector<std::string> i,
+        std::unique_ptr<Type> t,
+        Loc l) : Local(l), type(std::move(t)) { ids = i; }
+
+    void printNode(std::ostream& out) const override;
+private:
+    std::unique_ptr<Type> type;
+    std::vector<std::string> ids;
+};
+
+class LabelDef : public Local {
+public:
+    LabelDef(std::vector<std::string> i, Loc l)
+        : Local(l) { ids = i; }
+
+    void printNode(std::ostream& out) const override;
+private:
+    std::vector<std::string> ids;
+};
+
+class Formal : public AST {
+public:
+    Formal(std::vector<std::string> i,
+           std::unique_ptr<Type> t,
+           bool is_ref,
+           Loc l) 
+        : AST(l), ids(std::move(i)), type(std::move(t)), is_reference(is_ref) {}
+
+    void printNode(std::ostream& out) const override;
+
+private:
+    std::vector<std::string> ids;
+    std::unique_ptr<Type> type;
+    bool is_reference;
+};
+
+class RoutineDef : public Local {
+public:
+    RoutineDef(std::string n,
+               std::vector<std::unique_ptr<Formal>> f,
+               std::unique_ptr<Type> ret_type, // nullptr for procedures
+               std::unique_ptr<Body> b,        // nullptr for forward declaration
+               Loc l)
+        : Local(l), name(n), formals(std::move(f)), 
+          return_type(std::move(ret_type)), body(std::move(b)) {}
+
+    void printNode(std::ostream& out) const override;
+private:
+    std::string name;
+    std::vector<std::unique_ptr<Formal>> formals;
+    std::unique_ptr<Type> return_type; 
+    std::unique_ptr<Body> body; 
+};
+
+class Program : public AST {
+public:
+    Program(std::string n, std::unique_ptr<Body> b, Loc l)
+        : AST(l), name(n), body(std::move(b)) {}
+
+    void printNode(std::ostream& out) const override;
+private:
+    std::string name;
+    std::unique_ptr<Body> body;
+};
 
 #endif /* __AST_HPP__ */
