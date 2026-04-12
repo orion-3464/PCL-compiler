@@ -139,11 +139,12 @@ private:
 
 class Dispose : public Stmt {
 public:
-    Dispose(std::unique_ptr<Expr> e, Loc l)
-        : Stmt(l), lvl(std::move(e)) {}
+    Dispose(bool b, std::unique_ptr<Expr> e, Loc l)
+        : Stmt(l), brackets(b), lvl(std::move(e)) {}
 
     void printNode(std::ostream& out) const override;
 private:
+    bool brackets;
     std::unique_ptr<Expr> lvl;
 };
 
@@ -195,11 +196,11 @@ private:
 
 class Const : public Rvalue {
 public:
-    Const(int n, Loc l) : Rvalue(l), num(n) {}
+    Const(unsigned long n, Loc l) : Rvalue(l), num(n) {}
 
     void printNode(std::ostream& out) const override;
 private:
-    int num;
+    unsigned long num;
 };
 
 class Bool : public Rvalue {
@@ -422,7 +423,7 @@ public:
                std::vector<std::unique_ptr<Formal>> f,
                std::unique_ptr<Type> ret_type, // nullptr for procedures
                std::unique_ptr<Body> b,        // nullptr for forward declaration
-               Loc l)
+               Loc l)                          // and header
         : Local(l), name(n), formals(std::move(f)), 
           return_type(std::move(ret_type)), body(std::move(b)) {}
 
@@ -443,6 +444,12 @@ public:
 private:
     std::string name;
     std::unique_ptr<Body> body;
+};
+
+struct HeaderInfo {
+    std::string name;
+    std::vector<std::unique_ptr<Formal>> formals;
+    std::unique_ptr<Type> return_type; // nullptr για procedure
 };
 
 #endif /* __AST_HPP__ */
