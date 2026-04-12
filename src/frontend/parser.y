@@ -20,7 +20,7 @@
     #include "lexer.hpp"
     YY_DECL;
 
-    static std::unique_ptr<Program> programAST;
+    std::unique_ptr<Program> programAST;
 }
 
 %define api.value.type variant
@@ -117,62 +117,100 @@ program:
 ;
 
 body:
-    locals block { $$ = std::make_unique($1, $2, @$); }
+    locals block { $$ = std::make_unique<Body>($1, $2, @$); }
 ;
 
 locals:
-    %empty       { $$ = std::vector<std::unique_ptr<Local>>(@$); }
+    %empty       { $$ = std::vector<std::unique_ptr<Local>>(); }
 |   locals local {
+                     $$ = $1;
                      for(auto& l : $2)
-                         $1.push_back(l); $$ = $1;
+                         $$.push_back(std::move(l));  
                  }
 ;
 
 local:
-    "var" definitions 
-|   "label" id ids ';'
-|   header ';' body ';'
-|   "forward" header ';'
+    "var" definitions { $$ = $2; }
+|   "label" id ids ';' {
+                          auto v = $3;
+                          v.insert(v.begin(), $2);
+                          $$ = std::vector<std::unique_ptr<Local>>();
+                          $$.push_back(std::make_unique<LabelDef>(std::move(v), @$));
+                       } 
+|   header ';' body ';' {
+                            auto h = $1;
+                            $$ = std::vector<std::unique_ptr<Local>>();
+                            $$.push_back(std::make_unique<RoutineDef>(h.name,
+                                                                      std::move(h.formals),
+                                                                      std::move(h.return_type),
+                                                                      $3, @$));
+                        }
+|   "forward" header ';' {
+                             auto h = $2;
+                             $$ = std::vector<std::unique_ptr<Local>>();
+                             $$.push_back(std::make_unique<RoutineDef>(h.name, std::move(h.formals),
+                                                                       std::move(h.return_type),
+                                                                       nullptr, @$));
+                         }
 ;
 
 definitions:
-    definition
-|   definitions definition
+    definition { $$ = std::vector<std::unique_ptr<Local>>(); $$.push_back($1); }
+|   definitions definition { $$ = $1; $$.push_back($2); }
 ;
 
 definition:
     id ids ':' type ';' {
-                            
+                            auto v = $2;
+                            v.insert(v.begin(), $1);
+                            $$ = std::make_unique<Var>(std::move(v), $4, @$);
                         }
 ;
 
 ids:
-    %empty
-|   ids ',' id
+    %empty { $$ = std::vector<std::string>(); }
+|   ids ',' id { $$ = $1; $$.push_back($3); }
 ;
 
 header:
-    "procedure" id '(' parameters ')' /* parameters are optional */
-|   "function" id '(' parameters ')' ':' type
+    "procedure" id '(' parameters ')' /* parameters are optional */ {
+        HeaderInfo h;
+        h.name = $2;
+        h.formals = $4;
+        h.return_type = nullptr;
+        $$ = std::move(h);
+    }
+    
+|   "function" id '(' parameters ')' ':' type {
+        HeaderInfo h;
+        h.name = $2;
+        h.formals = $4;
+        h.return_type = $7;
+        $$ = std::move(h);
+    }
 ;
 
 parameters:
-    %empty
-|   formal formals
+    %empty  { $$ = std::vector<std::unique_ptr<Formal>>(); }
+|   formal formals  { $$ = $2; $$.insert($$.begin(), $1); }
 ;
 
 formals:
-    %empty
-|   formals ';' formal
+    %empty { $$ = std::vector<std::unique_ptr<Formal>>(); }
+|   formals ';' formal { $$ = $1; $$.push_back($3); }
 ;
 
 formal:
-    opvar id ids ':' type
+    opvar id ids ':' type {
+                              auto v = $3;
+                              v.insert(v.begin(), $2);
+                              $$ = std::make_unique<Formal>(std::move(v), $5, $1, @$);
+                          }
 ;
 
 opvar:
-    %empty
-|   "var"
+    %empty { $$ = false; }
+|   "var"  { $$ = true; }
 ;
 
 type:
@@ -190,26 +228,41 @@ size:
 ;
 
 block:
-    "begin" stmt stmts "end" {  }
+    "begin" stmt stmts "end" {
+                                 $$ = std::make_unique<Block>(@$);
+                                 $$->append($2);
+                                 for(auto& s : $3) $$->append(std::move(s));
+                             }
 ;
 
 stmts:
-    %empty
-|   stmts ';' stmt
+    %empty { $$ = std::vector<std::unique_ptr<Stmt>>(); }
+|   stmts ';' stmt { $$ = $1; $$.push_back($3); }
 ;
 
 stmt:
-    %empty { std::make_unique<Empty>(@$); }
-|   expr ":=" expr { std::make_unique<Assignment>($1, $3, @$); }
+    %empty { $$ = std::make_unique<Empty>(@$); }
+|   expr ":=" expr {
+                       Lvalue* lval_raw = dynamic_cast<Lvalue*>($1.release());
+                       if (!lval_raw) error(@1, "\033[91mLeft side of assignment must be an l-value\033[0m");
+                       $$ = std::make_unique<Assignment>(std::unique_ptr<Lvalue>(lval_raw), $3, @$);
+                   }
 |   block { $$ = $1; }
-|   call { std::make_unique<CallProc>($1.first, $1.second, @$); }
-|   "if" expr "then" stmt elseop { std::make_unique<Conditional>($2, $4, $5, @$); }
-|   "while" expr "do" stmt { std::make_unique<While>($2, $4, @$); }
-|   id ':' stmt { std::make_unique<Labeling>($1, $3, @$); }
-|   "goto" id { std::make_unique<Goto>($2, @$); }
-|   "return" { std::make_unique<Return>(@$); }
-|   "new" exprop expr { std::make_unique<New>($2, $3, @$); }
-|   "dispose" brackop expr { std::make_unique<Dispose>($2, $3, @$); }
+|   call {
+             auto h = $1;
+             $$ = std::make_unique<CallProc>(h.first, std::move(h.second), @$);
+         }
+|   "if" expr "then" stmt elseop { $$ = std::make_unique<Conditional>($2, $4, $5, @$); }
+|   "while" expr "do" stmt { $$ = std::make_unique<While>($2, $4, @$); }
+|   id ':' stmt { $$ = std::make_unique<Labeling>($1, $3, @$); }
+|   "goto" id { $$ = std::make_unique<Goto>($2, @$); }
+|   "return" { $$ = std::make_unique<Return>(@$); }
+|   "new" exprop expr {
+                          Lvalue* lval_raw = dynamic_cast<Lvalue*>($3.release());
+                          if (!lval_raw) error(@3, "\033[91mArgument to 'new' must be an l-value \033[0m");
+                          $$ = std::make_unique<New>($2, std::unique_ptr<Lvalue>(lval_raw), @$);
+                      }
+|   "dispose" brackop expr { $$ = std::make_unique<Dispose>($2, $3, @$); }
 ;
 
 elseop:
@@ -231,20 +284,23 @@ expr:
     id  { $$ = std::make_unique<Id>($1, @$); }
 |   "result" { $$ = std::make_unique<Result>(@$); }
 |   str { $$ = std::make_unique<Str>($1, @$); }
-|   expr '[' expr ']'
-|   expr '^'              %prec '^'
-|   '(' expr ')' { $$ = std::make_unique<Expr>($2, @$); }
+|   expr '[' expr ']' { $$ = std::make_unique<Access>($1, $3, @$); }
+|   expr '^' %prec '^' { $$ = std::make_unique<Deref>($1, @$); }
+|   '(' expr ')' { $$ = $2; }
 |   cint { $$ = std::make_unique<Const>($1, @$); }
 |   "true" { $$ = std::make_unique<Bool>(true, @$); }
 |   "false" { $$ = std::make_unique<Bool>(false, @$); }
 |   re { $$ = std::make_unique<Real>($1, @$); }
 |   cchar { $$ = std::make_unique<Char>($1, @$); }
 |   "nil" { $$ = std::make_unique<Nil>(@$); }
-|   call
-|   '@' expr              %prec '@'
-|   "not" expr            %prec UNARY
-|   '+' expr              %prec UNARY
-|   '-' expr              %prec UNARY
+|   call {
+             auto h = $1;
+             $$ = std::make_unique<CallFunc>(h.first, std::move(h.second), @$);
+         }
+|   '@' expr %prec '@' { $$ = std::make_unique<Ref>($2, @$); }
+|   "not" expr %prec UNARY { $$ = std::make_unique<Unop>(UnOp::Not, $2, @$); }
+|   '+' expr %prec UNARY { $$ = std::make_unique<Unop>(UnOp::Plus, $2, @$); }
+|   '-' expr %prec UNARY { $$ = std::make_unique<Unop>(UnOp::Minus, $2, @$); }
 |   expr '+' expr { $$ = std::make_unique<Binop>($1, BinOp::Add, $3, @$); }
 |   expr '-' expr { $$ = std::make_unique<Binop>($1, BinOp::Sub, $3, @$); }
 |   expr '*' expr { $$ = std::make_unique<Binop>($1, BinOp::Mul, $3, @$); }
@@ -262,17 +318,17 @@ expr:
 ;
 
 call:
-    id '(' args ')' { $$ = std::make_pair($1, ); }
+    id '(' args ')' { $$ = std::make_pair($1, $3); }
 ;
 
 args:
-    %empty
-|   expr exprs
+    %empty { $$ = std::vector<std::unique_ptr<Expr>>(); }
+|   expr exprs { $$ = $2; $$.insert($$.begin(), $1); }
 ;
 
 exprs:
-    %empty
-|   exprs ',' expr  
+    %empty { $$ = std::vector<std::unique_ptr<Expr>>(); }
+|   exprs ',' expr { $$ = $1; $$.push_back($3); }
 ;
 
 %%
