@@ -87,7 +87,6 @@
 %nterm<std::unique_ptr<Block>> block
 
 %nterm<std::vector<std::unique_ptr<Local>>> locals local definitions
-/*%nterm<std::vector<std::unique_ptr<Var>>> definitions*/
 %nterm<std::unique_ptr<Local>> definition
 
 %nterm<HeaderInfo> header
