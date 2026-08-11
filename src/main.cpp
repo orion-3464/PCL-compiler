@@ -23,7 +23,7 @@ int main(int argc, char **argv) {
     else {
         yyin = stdin;
     }
-
+    
     yy::parser p;
     
     int result = p.parse();

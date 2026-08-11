@@ -18,9 +18,35 @@
 #include <cerrno>
 #include <cstdlib>
 
+#include "error.hpp"
+
 static yy::location loc;
 
 #define YY_USER_ACTION loc.columns(yyleng);
+
+std::string process_string(const char* text) {
+    std::string result;
+    for (int i = 1; text[i+1] != '\0'; ++i) {
+        if (text[i] == '\\') {
+            i++; 
+            switch(text[i]) {
+                case 'n':  result += '\n'; break;
+                case 't':  result += '\t'; break;
+                case 'r':  result += '\r'; break;
+                case '0':  result += '\0'; break;
+                case '\\': result += '\\'; break;
+                case '\'': result += '\''; break;
+                case '\"': result += '\"'; break;
+                default:   result += text[i]; break; 
+            }
+        }
+	else {
+            result += text[i];
+        }
+    }
+    return result;
+}
+
 %}
 
 %x COMMENT
@@ -83,14 +109,12 @@ loc.step();
                                   errno = 0;
                                   unsigned long x = std::strtoul(yytext, &end, 10);
                                   if(errno == ERANGE) {
-                                      std::cerr << "\033[91mError: Integer constant is too large\n"
-                                                << "Line: " << loc.begin.line << "\033[0m\n";
-                                      std::exit(1);
+                                      ErrorHandler::error(loc, "Integer constant is too large");
+				      return yy::parser::make_YYEOF(loc);
                                   }
-                                  if(*end != '\0') {
-                                      std::cerr << "\033[91mError: Illegal integer constant\n"
-                                                << std::endl;
-                                      std::exit(1);
+                                  if(*end != '\0') {    
+                                      ErrorHandler::error(loc, "Illegal integer constant");
+				      return yy::parser::make_YYEOF(loc);
                                   }
                                   return yy::parser::make_cint(x, loc);
                                 }
@@ -98,9 +122,7 @@ loc.step();
                                   return yy::parser::make_re(std::stod(s), loc);
                                 }
 '([^\'\\]|{ESC})'               { return yy::parser::make_cchar(yytext[1], loc); }
-\"([^\"\\\n]|{ESC})*\"          { std::string s(yytext);
-                                  return yy::parser::make_str(s, loc);
-                                }
+\"([^\"\\\n]|{ESC})*\"          { return yy::parser::make_str(process_string(yytext), loc); }
 \"([^\"\\\n]|{ESC})*            { std::cerr << "\033[91mError: Unterminated string\033[0m"
                                             << std::endl;
                                   std::exit(1);
@@ -112,16 +134,13 @@ loc.step();
 "(*"                { BEGIN(COMMENT); }
 <COMMENT>"*)"       { BEGIN(INITIAL); }
 <COMMENT>(.|\n)
-<COMMENT><<EOF>>    { std::cerr << "\033[91mError: Unclosed comment" << std::endl 
-                                << "Line: " << loc.begin.line << "\033[0m"
-                                << std::endl;
-                      std::exit(1);
+<COMMENT><<EOF>>    {
+                      ErrorHandler::error(loc, "Unclosed comment");
+                      return yy::parser::make_YYEOF(loc);
                     }
 
-. { std::cerr << "\033[91mIllegal character '" << yytext[0]
-              << "' at line " << loc.begin.line << "\033[0m"
-              << std::endl;
-    std::exit(1);
+. {
+      ErrorHandler::error(loc, "Illegal character '" + std::string(1, yytext[0]) + "'");
   }
 
 <<EOF>>    { return yy::parser::make_YYEOF(loc); }

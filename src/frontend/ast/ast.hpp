@@ -6,7 +6,10 @@
 #include <string>
 #include <vector>
 #include <iostream>
+
 #include "location.hpp"
+#include "error.hpp"
+#include "symbol.hpp"
 
 typedef yy::location Loc;
 
@@ -14,6 +17,7 @@ class AST {
 public:
     AST(Loc l) : loc(l) {}
     virtual ~AST() = default;
+    virtual void sem_analyze() {}
     virtual void printNode(std::ostream &out) const = 0;
 
 private:
@@ -23,7 +27,76 @@ private:
 inline std::ostream& operator << (std::ostream& out, const AST& ast) {
     ast.printNode(out);
     return out;
-} 
+}
+
+class Type : public AST {
+public:
+    Type(Loc l) : AST(l) {}
+ 
+    virtual int getSize() const = 0;
+    virtual bool isComposite() const = 0;
+    virtual bool isComplete() const = 0;
+    virtual bool isArithmetic() const = 0;
+    virtual PCLtype infer_type() const = 0;
+    virtual bool isSame(const Type* other) const = 0; // mainly for args
+    virtual bool isCompatible(const Type* other) const = 0; // mainly for asgn
+};
+
+class BasicType : public Type {
+public:
+    BasicType(PCLtype t, Loc l) : Type(l), type(t) {}
+    
+    int getSize() const override;
+    bool isComposite() const override;
+    bool isComplete() const override;
+    bool isArithmetic() const override;
+    PCLtype infer_type() const override;
+    bool isSame(const Type* other) const override;
+    bool isCompatible(const Type* other) const override;
+    void printNode(std::ostream& out) const override;
+private:
+    PCLtype type; 
+};
+
+class ArrayType : public Type {
+public:
+    ArrayType(int s, std::unique_ptr<Type> elem, Loc l)
+        : Type(l), size(s), element_type(std::move(elem)) {}
+
+    const Type* getElementType() const;
+    int getLength() const;
+
+    int getSize() const override;
+    bool isComposite() const override;
+    bool isComplete() const override;
+    bool isArithmetic() const override;
+    PCLtype infer_type() const override;
+    bool isSame(const Type* other) const override;
+    bool isCompatible(const Type* other) const override;
+    void printNode(std::ostream& out) const override;
+private:
+    int size; // Negative for incomplete types 
+    std::unique_ptr<Type> element_type;
+};
+
+class PointerType : public Type {
+public:
+    PointerType(std::unique_ptr<Type> tgt, Loc l) 
+        : Type(l), target(std::move(tgt)) {}
+
+    const Type* getTargetType() const;
+    
+    int getSize() const override;
+    bool isComposite() const override;
+    bool isComplete() const override;
+    bool isArithmetic() const override;
+    PCLtype infer_type() const override;
+    bool isSame(const Type* other) const override;
+    bool isCompatible(const Type* other) const override;
+    void printNode(std::ostream& out) const override;
+private:
+    std::unique_ptr<Type> target;
+};
 
 class Stmt : public AST {
 public:
@@ -33,6 +106,10 @@ public:
 class Expr : public AST {
 public:
     Expr(Loc l) : AST(l) {}
+
+    //void type_check(Type t);
+protected:
+    std::unique_ptr<Type> type;
 };
 
 class Lvalue : public Expr {
@@ -64,12 +141,12 @@ public:
 
 class Assignment : public Stmt {
 public:
-    Assignment(std::unique_ptr<Lvalue> lhs, std::unique_ptr<Expr> rhs, Loc l)
+    Assignment(std::unique_ptr<Expr> lhs, std::unique_ptr<Expr> rhs, Loc l)
         : Stmt(l), lval(std::move(lhs)), e(std::move(rhs)) {}
 
     void printNode(std::ostream& out) const override;
 private:
-    std::unique_ptr<Lvalue> lval;
+    std::unique_ptr<Expr> lval;
     std::unique_ptr<Expr> e;
 };
 
@@ -313,54 +390,6 @@ private:
     std::vector<std::unique_ptr<Expr>> args;
 };
 
-class Type : public AST {
-public:
-    Type(Loc l) : AST(l) {}
-
-    virtual int getSize() const = 0;
-    virtual bool isComplete() const = 0;
-    virtual bool isArithmetic() const = 0;
-};
-
-class BasicType : public Type {
-public:
-    BasicType(std::string n, Loc l) : Type(l), name(n) {}
-
-    int getSize() const override;
-    bool isComplete() const override;
-    bool isArithmetic() const override;
-    void printNode(std::ostream& out) const override;
-private:
-    std::string name; 
-};
-
-class ArrayType : public Type {
-public:
-    ArrayType(int s, std::unique_ptr<Type> elem, Loc l)
-        : Type(l), size(s), element_type(std::move(elem)) {}
-
-    int getSize() const override;
-    bool isComplete() const override;
-    bool isArithmetic() const override;
-    void printNode(std::ostream& out) const override;
-private:
-    int size; // Negative for incomplete types 
-    std::unique_ptr<Type> element_type;
-};
-
-class PointerType : public Type {
-public:
-    PointerType(std::unique_ptr<Type> tgt, Loc l) 
-        : Type(l), target(std::move(tgt)) {}
-
-    int getSize() const override;
-    bool isComplete() const override;
-    bool isArithmetic() const override;
-    void printNode(std::ostream& out) const override;
-private:
-    std::unique_ptr<Type> target;
-};
-
 class Local : public AST {
 public:
     Local(Loc l) : AST(l) {} 
@@ -417,21 +446,31 @@ private:
     bool is_reference;
 };
 
-class RoutineDef : public Local {
+class Header {
 public:
-    RoutineDef(std::string n,
-               std::vector<std::unique_ptr<Formal>> f,
-               std::unique_ptr<Type> ret_type, // nullptr for procedures
-               std::unique_ptr<Body> b,        // nullptr for forward declaration
-               Loc l)                          // and header
-        : Local(l), name(n), formals(std::move(f)), 
-          return_type(std::move(ret_type)), body(std::move(b)) {}
-
-    void printNode(std::ostream& out) const override;
+    Header(std::string n, std::vector<std::unique_ptr<Formal>> f,
+           std::unique_ptr<Type> t) : name(n), formals(std::move(f)),
+                                      return_type(std::move(t)) {}
+    
+    const std::string& getName() const;
+    const std::vector<std::unique_ptr<Formal>>& getFormals() const;
+    const Type* getRetType() const;
 private:
     std::string name;
     std::vector<std::unique_ptr<Formal>> formals;
-    std::unique_ptr<Type> return_type; 
+    std::unique_ptr<Type> return_type; // nullptr για procedure
+};
+
+class RoutineDef : public Local {
+public:
+    RoutineDef(std::unique_ptr<Header> h,
+               std::unique_ptr<Body> b,        // nullptr for forward declaration
+               Loc l)                          // and header
+        : Local(l), header(std::move(h)), body(std::move(b)) {}
+
+    void printNode(std::ostream& out) const override;
+private:
+    std::unique_ptr<Header> header;
     std::unique_ptr<Body> body; 
 };
 
@@ -444,12 +483,6 @@ public:
 private:
     std::string name;
     std::unique_ptr<Body> body;
-};
-
-struct HeaderInfo {
-    std::string name;
-    std::vector<std::unique_ptr<Formal>> formals;
-    std::unique_ptr<Type> return_type; // nullptr για procedure
 };
 
 #endif /* __AST_HPP__ */

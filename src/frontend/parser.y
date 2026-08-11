@@ -14,6 +14,7 @@
 
 %code requires {
     #include "ast.hpp"
+    #include "error.hpp"
 }
 
 %code {
@@ -89,7 +90,7 @@
 %nterm<std::vector<std::unique_ptr<Local>>> locals local definitions
 %nterm<std::unique_ptr<Local>> definition
 
-%nterm<HeaderInfo> header
+%nterm<std::unique_ptr<Header>> header
 %nterm<std::vector<std::unique_ptr<Formal>>> parameters formals
 %nterm<std::unique_ptr<Formal>> formal
 
@@ -137,19 +138,12 @@ local:
                           $$.push_back(std::make_unique<LabelDef>(std::move(v), @$));
                        } 
 |   header ';' body ';' {
-                            auto h = $1;
                             $$ = std::vector<std::unique_ptr<Local>>();
-                            $$.push_back(std::make_unique<RoutineDef>(h.name,
-                                                                      std::move(h.formals),
-                                                                      std::move(h.return_type),
-                                                                      $3, @$));
+                            $$.push_back(std::make_unique<RoutineDef>($1, $3, @$));
                         }
 |   "forward" header ';' {
-                             auto h = $2;
                              $$ = std::vector<std::unique_ptr<Local>>();
-                             $$.push_back(std::make_unique<RoutineDef>(h.name, std::move(h.formals),
-                                                                       std::move(h.return_type),
-                                                                       nullptr, @$));
+                             $$.push_back(std::make_unique<RoutineDef>($2, nullptr, @$));
                          }
 ;
 
@@ -173,19 +167,11 @@ ids:
 
 header:
     "procedure" id '(' parameters ')' /* parameters are optional */ {
-        HeaderInfo h;
-        h.name = $2;
-        h.formals = $4;
-        h.return_type = nullptr;
-        $$ = std::move(h);
+        $$ = std::make_unique<Header>($2, $4, nullptr);
     }
     
 |   "function" id '(' parameters ')' ':' type {
-        HeaderInfo h;
-        h.name = $2;
-        h.formals = $4;
-        h.return_type = $7;
-        $$ = std::move(h);
+        $$ = std::make_unique<Header>($2, $4, $7);
     }
 ;
 
@@ -213,10 +199,10 @@ opvar:
 ;
 
 type:
-    "integer" { $$ = std::make_unique<BasicType>("integer", @$); }
-|   "real" { $$ = std::make_unique<BasicType>("real", @$); }
-|   "boolean" { $$ = std::make_unique<BasicType>("boolean", @$); }
-|   "char" { $$ = std::make_unique<BasicType>("char", @$); }
+    "integer" { $$ = std::make_unique<BasicType>(PCLtype::Integer, @$); }
+|   "real" { $$ = std::make_unique<BasicType>(PCLtype::Real, @$); }
+|   "boolean" { $$ = std::make_unique<BasicType>(PCLtype::Boolean, @$); }
+|   "char" { $$ = std::make_unique<BasicType>(PCLtype::Char, @$); }
 |   "array" size "of" type { $$ = std::make_unique<ArrayType>($2, $4, @$); }
 |   '^' type { $$ = std::make_unique<PointerType>($2, @$); }
 ;
@@ -241,11 +227,7 @@ stmts:
 
 stmt:
     %empty { $$ = std::make_unique<Empty>(@$); }
-|   expr ":=" expr {
-                       Lvalue* lval_raw = dynamic_cast<Lvalue*>($1.release());
-                       if (!lval_raw) error(@1, "\033[91mLeft side of assignment must be an l-value\033[0m");
-                       $$ = std::make_unique<Assignment>(std::unique_ptr<Lvalue>(lval_raw), $3, @$);
-                   }
+|   expr ":=" expr { $$ = std::make_unique<Assignment>($1, $3, @$); }
 |   block { $$ = $1; }
 |   call {
              auto h = $1;
@@ -256,11 +238,7 @@ stmt:
 |   id ':' stmt { $$ = std::make_unique<Labeling>($1, $3, @$); }
 |   "goto" id { $$ = std::make_unique<Goto>($2, @$); }
 |   "return" { $$ = std::make_unique<Return>(@$); }
-|   "new" exprop expr {
-                          Lvalue* lval_raw = dynamic_cast<Lvalue*>($3.release());
-                          if (!lval_raw) error(@3, "\033[91mArgument to 'new' must be an l-value \033[0m");
-                          $$ = std::make_unique<New>($2, std::unique_ptr<Lvalue>(lval_raw), @$);
-                      }
+|   "new" exprop expr { $$ = std::make_unique<New>($2, $3, @$); }
 |   "dispose" brackop expr { $$ = std::make_unique<Dispose>($2, $3, @$); }
 ;
 
@@ -333,7 +311,5 @@ exprs:
 %%
 
 void yy::parser::error(const location_type& l, const std::string& m) {
-  std::cerr << "\033[91mError: " << m << " at line "
-            << l.begin.line << "\033[0m" << std::endl;
-  std::exit(1);
+    ErrorHandler::error(l, m);
 }

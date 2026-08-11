@@ -3,17 +3,23 @@
 BUILD := build
 
 CXX := g++
-CXXFLAGS := -g -Wall -Wextra -Wpedantic -std=c++23 -O3 -I./src -I./$(BUILD) -I./src/ast
+CXXFLAGS := -g -Wall -Wextra -Wpedantic -std=c++23 -O3 -I./src -I./$(BUILD) -I./src/frontend/ast
 
 default: pcl
 
-pcl: $(BUILD)/lexer.o $(BUILD)/parser.o $(BUILD)/ast.o $(BUILD)/main.o  
+pcl: $(BUILD)/lexer.o $(BUILD)/parser.o $(BUILD)/ast.o $(BUILD)/error.o $(BUILD)/symbol.o $(BUILD)/main.o  
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 $(BUILD)/main.o: src/main.cpp $(BUILD)/parser.hpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) -c $< -o $@ 
 
-$(BUILD)/ast.o: src/ast/ast.cpp src/ast/ast.hpp $(BUILD)/location.hpp | $(BUILD)
+$(BUILD)/symbol.o: src/frontend/ast/symbol.cpp src/frontend/ast/symbol.hpp $(BUILD)/location.hpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) -c $< -o $@ 
+
+$(BUILD)/error.o: src/frontend/ast/error.cpp src/frontend/ast/error.hpp $(BUILD)/location.hpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) -c $< -o $@ 
+
+$(BUILD)/ast.o: src/frontend/ast/ast.cpp src/frontend/ast/ast.hpp $(BUILD)/location.hpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) -c $< -o $@ 
 
 $(BUILD)/parser.o: $(BUILD)/parser.cpp $(BUILD)/parser.hpp $(BUILD)/lexer.hpp | $(BUILD)

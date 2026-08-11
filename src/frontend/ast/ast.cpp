@@ -31,6 +31,9 @@ std::string to_string(UnOp op) {
     }
 }
 
+/* ==================== Expr ==================== */
+
+
 /* ==================== Block ==================== */
 
 void Block::append(std::unique_ptr<Stmt> s)  {
@@ -215,10 +218,14 @@ void CallFunc::printNode(std::ostream& out) const {
 /* ==================== Basic Type ==================== */
 
 int BasicType::getSize() const {
-    if(name == "integer") return 4;
-    else if(name == "real") return 8;
-    else if (name == "boolean" || name == "char") return 1;
+    if(type == PCLtype::Integer) return 4;
+    else if(type == PCLtype::Real) return 8;
+    else if (type == PCLtype::Boolean || type == PCLtype::Char) return 1;
     else return 0;
+}
+
+bool BasicType::isComposite() const {
+    return false;
 }
 
 bool BasicType::isComplete() const { 
@@ -226,18 +233,62 @@ bool BasicType::isComplete() const {
 }
 
 bool BasicType::isArithmetic() const {
-    return (name == "integer" || name == "real");
+    return (type == PCLtype::Integer || type == PCLtype::Real);
+}
+
+PCLtype BasicType::infer_type() const {
+    return type;
+}
+
+bool BasicType::isSame(const Type *other) const {
+    const BasicType* b = dynamic_cast<const BasicType*>(other);
+    return (!b) ? false : (b->infer_type() == this->infer_type()); 
+}
+
+bool BasicType::isCompatible(const Type* other) const {
+    if (this->isSame(other)) return true;
+    else if (!other->isComposite() && (type == PCLtype::Real && other->infer_type() == PCLtype::Integer)) return true;
+    else return false;
 }
 
 void BasicType::printNode(std::ostream& out) const {
-    out << "BasicType(" << name << ")";
+    switch(type) {
+    case PCLtype::Integer:
+        out << "BasicType( integer )";
+        break;
+    case PCLtype::Real:
+        out << "BasicType( real )";
+        break;
+    case PCLtype::Boolean:
+        out << "BasicType( boolean )";
+        break;
+    case PCLtype::Char:
+        out << "BasicType( char )";
+        break;
+    default:
+        out << "Not a Basic Type";
+        break;
+    }
 }
 
 /* ==================== Array Type ==================== */
 
+const Type* ArrayType::getElementType() const {
+    const Type* t = element_type.get();
+    return t;
+}
+
+int ArrayType::getLength() const {
+    return size;
+}
+
 int ArrayType::getSize() const {
     if (!isComplete()) return 0;
     return size * element_type->getSize();
+}
+
+bool ArrayType::isComposite() const {
+    return true;
 }
 
 bool ArrayType::isComplete() const { 
@@ -248,6 +299,21 @@ bool ArrayType::isArithmetic() const {
     return false;
 }
 
+PCLtype ArrayType::infer_type() const {
+    return element_type->infer_type();
+}
+
+bool ArrayType::isSame(const Type *other) const {
+    const ArrayType* a = dynamic_cast<const ArrayType*>(other); 
+    return (a && (size == a->getLength())) ? element_type->isSame(a->getElementType()) : false; 
+}
+
+bool ArrayType::isCompatible(const Type* other) const {
+    return this->isComplete() && this->isSame(other);
+    // TODO: See if conversion is done by the compiler in a for loop
+    // else if (other->isComposite() && (element_type->infer_type() == PCLtype::Real && other->infer_type() == PCLtype::Integer)) return true;
+}
+
 void ArrayType::printNode(std::ostream& out) const {
     out << "ArrayType( element type: " << *element_type
         << " size: " << size << " )";
@@ -255,8 +321,17 @@ void ArrayType::printNode(std::ostream& out) const {
 
 /* ==================== Pointer Type ==================== */
 
+const Type* PointerType::getTargetType() const {
+    const Type* t = target.get();
+    return t;
+}
+
 int PointerType::getSize() const {
     return 8;
+}
+
+bool PointerType::isComposite() const {
+    return true;
 }
 
 bool PointerType::isComplete() const { 
@@ -264,6 +339,31 @@ bool PointerType::isComplete() const {
 }
 
 bool PointerType::isArithmetic() const {
+    return false;
+}
+
+PCLtype PointerType::infer_type() const {
+    return target->infer_type();
+}
+
+bool PointerType::isSame(const Type *other) const {
+    const PointerType* p = dynamic_cast<const PointerType*>(other); 
+    return (p) ? target->isSame(p->getTargetType()) : false; 
+}
+
+bool PointerType::isCompatible(const Type* other) const {
+    const PointerType* pother = dynamic_cast<const PointerType*>(other);
+    if (!pother) return false;
+    if (this->isSame(other)) return true;
+
+    const ArrayType* thisArrayTarget = dynamic_cast<const ArrayType*>(target.get());
+    const ArrayType* otherArrayTarget = dynamic_cast<const ArrayType*>(pother->getTargetType());
+
+    if ((thisArrayTarget && otherArrayTarget) &&
+        (!thisArrayTarget->isComplete() && otherArrayTarget->isComplete()) &&
+        (thisArrayTarget->getElementType()->isSame(otherArrayTarget->getElementType())))
+            return true;
+    
     return false;
 }
 
@@ -313,9 +413,27 @@ void Formal::printNode(std::ostream& out) const  {
     out << ": " << *type << " )";
 }
 
+/* ==================== Header ==================== */
+
+const std::string& Header::getName() const {
+    return name;
+}
+
+const std::vector<std::unique_ptr<Formal>>& Header::getFormals() const {
+    return formals;
+}
+
+const Type* Header::getRetType() const {
+    return return_type.get();
+}
+
 /* ==================== RoutineDef ==================== */
 
 void RoutineDef::printNode(std::ostream& out) const {
+    const std::string& name = header->getName();
+    const std::vector<std::unique_ptr<Formal>>& formals = header->getFormals();
+    const Type* return_type = header->getRetType();
+    
     (return_type) ? out << "FunctionDef( " << name << " (" 
         : out << "ProcedureDef( " << name << " (";
  
