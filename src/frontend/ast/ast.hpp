@@ -15,8 +15,10 @@ typedef yy::location Loc;
 
 class AST {
 public:
+    AST() = default;
     AST(Loc l) : loc(l) {}
     virtual ~AST() = default;
+    Loc getLoc() const { return loc; }
     virtual void sem_analyze() {}
     virtual void printNode(std::ostream &out) const = 0;
 
@@ -31,37 +33,49 @@ inline std::ostream& operator << (std::ostream& out, const AST& ast) {
 
 class Type : public AST {
 public:
+    Type() = default;
     Type(Loc l) : AST(l) {}
  
     virtual int getSize() const = 0;
     virtual bool isComposite() const = 0;
     virtual bool isComplete() const = 0;
     virtual bool isArithmetic() const = 0;
-    virtual PCLtype infer_type() const = 0;
+    virtual PCLtype inferType() const = 0;
+    virtual PCLtype getType() const = 0;
+    virtual std::unique_ptr<Type> cloneType() const = 0;
     virtual bool isSame(const Type* other) const = 0; // mainly for args
     virtual bool isCompatible(const Type* other) const = 0; // mainly for asgn
+protected:
+    PCLtype type;
 };
 
 class BasicType : public Type {
 public:
-    BasicType(PCLtype t, Loc l) : Type(l), type(t) {}
+    BasicType(PCLtype t) {type = t;}
+    BasicType(PCLtype t, Loc l) : Type(l) {type = t;}
     
     int getSize() const override;
     bool isComposite() const override;
     bool isComplete() const override;
     bool isArithmetic() const override;
-    PCLtype infer_type() const override;
+    PCLtype inferType() const override;
+    PCLtype getType() const override;
+    std::unique_ptr<Type> cloneType() const override;
     bool isSame(const Type* other) const override;
     bool isCompatible(const Type* other) const override;
     void printNode(std::ostream& out) const override;
-private:
-    PCLtype type; 
 };
 
 class ArrayType : public Type {
 public:
+    ArrayType(int s, std::unique_ptr<Type> elem)
+        : size(s), element_type(std::move(elem)) {
+        type = PCLtype::Array;
+    }
     ArrayType(int s, std::unique_ptr<Type> elem, Loc l)
-        : Type(l), size(s), element_type(std::move(elem)) {}
+        : Type(l), size(s), element_type(std::move(elem)) {
+        type = PCLtype::Array;
+    }
 
     const Type* getElementType() const;
     int getLength() const;
@@ -70,19 +84,27 @@ public:
     bool isComposite() const override;
     bool isComplete() const override;
     bool isArithmetic() const override;
-    PCLtype infer_type() const override;
+    PCLtype inferType() const override;
+    PCLtype getType() const override;
+    std::unique_ptr<Type> cloneType() const override;
     bool isSame(const Type* other) const override;
     bool isCompatible(const Type* other) const override;
     void printNode(std::ostream& out) const override;
 private:
-    int size; // Negative for incomplete types 
+    int size; // Negative for incomplete types
     std::unique_ptr<Type> element_type;
 };
 
 class PointerType : public Type {
 public:
+    PointerType(std::unique_ptr<Type> t)
+        : target(std::move(t)) {
+        type = PCLtype::Pointer;
+    }
     PointerType(std::unique_ptr<Type> tgt, Loc l) 
-        : Type(l), target(std::move(tgt)) {}
+        : Type(l), target(std::move(tgt)) {
+        type = PCLtype::Pointer;
+    }
 
     const Type* getTargetType() const;
     
@@ -90,12 +112,15 @@ public:
     bool isComposite() const override;
     bool isComplete() const override;
     bool isArithmetic() const override;
-    PCLtype infer_type() const override;
+    PCLtype inferType() const override;
+    PCLtype getType() const override;
+    std::unique_ptr<Type> cloneType() const override;
     bool isSame(const Type* other) const override;
     bool isCompatible(const Type* other) const override;
     void printNode(std::ostream& out) const override;
 private:
     std::unique_ptr<Type> target;
+    PCLtype type = PCLtype::Pointer;
 };
 
 class Stmt : public AST {
@@ -107,7 +132,8 @@ class Expr : public AST {
 public:
     Expr(Loc l) : AST(l) {}
 
-    //void type_check(Type t);
+    const Type* getExprType() { return type.get(); }
+    void type_check(Type t);
 protected:
     std::unique_ptr<Type> type;
 };
@@ -127,6 +153,7 @@ public:
     Block(Loc l) : Stmt(l) {}
 
     void append(std::unique_ptr<Stmt> s);
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::vector<std::unique_ptr<Stmt>> stmts;
@@ -144,6 +171,7 @@ public:
     Assignment(std::unique_ptr<Expr> lhs, std::unique_ptr<Expr> rhs, Loc l)
         : Stmt(l), lval(std::move(lhs)), e(std::move(rhs)) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::unique_ptr<Expr> lval;
@@ -158,6 +186,7 @@ public:
                 Loc l)
         : Stmt(l), cond(std::move(c)), then_stmt(std::move(ts)), else_stmt(std::move(es)) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::unique_ptr<Expr> cond;
@@ -169,7 +198,8 @@ class While : public Stmt {
 public:
     While(std::unique_ptr<Expr> c, std::unique_ptr<Stmt> lo, Loc l)
         : Stmt(l), cond(std::move(c)), loop(std::move(lo)) {}
-    
+
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::unique_ptr<Expr> cond;
@@ -180,7 +210,8 @@ class Labeling : public Stmt {
 public:
     Labeling(std::string la, std::unique_ptr<Stmt> c, Loc l)
         : Stmt(l), label(la), code(std::move(c)) {}
-    
+
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::string label;
@@ -191,6 +222,7 @@ class Goto : public Stmt {
 public:
     Goto(std::string la, Loc l) : Stmt(l), label(la) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::string label;
@@ -200,6 +232,7 @@ class Return : public Stmt {
 public:
     Return(Loc l) : Stmt(l) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 };
 
@@ -208,6 +241,7 @@ public:
     New(std::unique_ptr<Expr> n, std::unique_ptr<Expr> e, Loc l)
         : Stmt(l), size(std::move(n)), lvl(std::move(e)) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::unique_ptr<Expr> size;
@@ -219,6 +253,7 @@ public:
     Dispose(bool b, std::unique_ptr<Expr> e, Loc l)
         : Stmt(l), brackets(b), lvl(std::move(e)) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     bool brackets;
@@ -229,6 +264,7 @@ class Id : public Lvalue {
 public:
     Id(std::string n, Loc l) : Lvalue(l), name(n) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::string name;
@@ -238,6 +274,7 @@ class Result : public Lvalue {
 public:
     Result(Loc l) : Lvalue(l) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 };
 
@@ -245,6 +282,7 @@ class Str : public Lvalue {
 public:
     Str(std::string v, Loc l) : Lvalue(l), value(v) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::string value;
@@ -255,6 +293,7 @@ public:
     Access(std::unique_ptr<Expr> a, std::unique_ptr<Expr> idx, Loc l)
         : Lvalue(l), array_base(std::move(a)), index(std::move(idx)) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::unique_ptr<Expr> array_base;
@@ -266,6 +305,7 @@ public:
     Deref(std::unique_ptr<Expr> p, Loc l)
         : Lvalue(l), pointer(std::move(p)) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::unique_ptr<Expr> pointer;
@@ -275,6 +315,7 @@ class Const : public Rvalue {
 public:
     Const(unsigned long n, Loc l) : Rvalue(l), num(n) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     unsigned long num;
@@ -284,6 +325,7 @@ class Bool : public Rvalue {
 public:
     Bool(bool v, Loc l) : Rvalue(l), val(v) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     bool val;
@@ -293,6 +335,7 @@ class Real : public Rvalue {
 public:
     Real(double v, Loc l) : Rvalue(l), val(v) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     double val;
@@ -301,7 +344,8 @@ private:
 class Char : public Rvalue {
 public:
     Char(char v, Loc l) : Rvalue(l), val(v) {}
-    
+
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     char val;
@@ -311,13 +355,15 @@ class Nil : public Rvalue {
 public:
     Nil(Loc l) : Rvalue(l) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 };
 
 class Ref : public Rvalue {
 public:
     Ref(std::unique_ptr<Expr> le, Loc l) : Rvalue(l), left_value(std::move(le)) {}
-    
+
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::unique_ptr<Expr> left_value;
@@ -345,6 +391,7 @@ public:
     Unop(UnOp o, std::unique_ptr<Expr> e, Loc l)
         : Rvalue(l), op(o), expr(std::move(e)) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     UnOp op;
@@ -359,6 +406,7 @@ public:
           Loc l)
         : Rvalue(l), left(std::move(le)), op(o), right(std::move(re)) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::unique_ptr<Expr> left;

@@ -4,6 +4,8 @@
 #include <map>
 #include <vector>
 
+#include "error.hpp"
+
 enum class PCLtype {
     Integer,
     Boolean,
@@ -12,6 +14,15 @@ enum class PCLtype {
     Array,
     Pointer,
     Nil
+};
+
+enum class PCLsymbol {
+    Variable,
+    ParameterVal,
+    ParameterRef,
+    Function,
+    Procedure,
+    Label    
 };
 
 
