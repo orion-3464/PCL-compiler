@@ -1,14 +1,22 @@
-.PHONY: clean distclean default
+.PHONY: clean distclean default libpcl
 
 BUILD := build
 
 CXX := g++
 CXXFLAGS := -g -Wall -Wextra -Wpedantic -std=c++23 -O3 -I./src -I./$(BUILD) -I./src/frontend/ast
 
-default: pcl
+CC := gcc
+CFLAGS := -O2 -Wall -Wextra -Wpedantic -std=c23 -I./src/libpcl -fno-builtin-trunc -fno-builtin-round
+
+default: pcl libpcl
 
 pcl: $(BUILD)/lexer.o $(BUILD)/parser.o $(BUILD)/ast.o $(BUILD)/error.o $(BUILD)/symbol.o $(BUILD)/main.o  
 	$(CXX) $(CXXFLAGS) -o $@ $^
+
+libpcl: $(BUILD)/libpcl.o
+
+$(BUILD)/libpcl.o: src/libpcl/libpcl.c src/libpcl/libpcl.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/main.o: src/main.cpp $(BUILD)/parser.hpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) -c $< -o $@ 
