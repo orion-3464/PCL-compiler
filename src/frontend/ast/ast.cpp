@@ -1,6 +1,7 @@
 #include "ast.hpp"
-#include <memory>
-#include <ostream>
+#include "error.hpp"
+
+#include <iostream>
 
 std::string to_string(BinOp op) {
     switch(op) {

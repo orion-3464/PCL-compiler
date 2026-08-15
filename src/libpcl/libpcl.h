@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 #define STDIN 0
 #define STDOUT 1

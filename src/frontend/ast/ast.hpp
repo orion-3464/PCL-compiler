@@ -5,11 +5,8 @@
 #include <ostream>
 #include <string>
 #include <vector>
-#include <iostream>
 
 #include "location.hpp"
-#include "error.hpp"
-#include "symbol.hpp"
 
 typedef yy::location Loc;
 
@@ -30,6 +27,25 @@ inline std::ostream& operator << (std::ostream& out, const AST& ast) {
     ast.printNode(out);
     return out;
 }
+
+enum class PCLtype {
+    Integer,
+    Boolean,
+    Char,
+    Real,
+    Array,
+    Pointer,
+    Nil
+};
+
+enum class PCLsymbol {
+    Variable,
+    ParameterVal,
+    ParameterRef,
+    Function,
+    Procedure,
+    Label    
+};
 
 class Type : public AST {
 public:
