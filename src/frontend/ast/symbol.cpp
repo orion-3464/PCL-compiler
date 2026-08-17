@@ -85,3 +85,7 @@ SymTabEntry* SymbolTable::lookup(const std::string& s) {
     return (it != symbol_table.end() && !it->second.empty()) ?
         &(it->second.back()) : nullptr;
 }
+
+unsigned int SymbolTable::getCurrentDepth() const {
+    return current_depth;
+}

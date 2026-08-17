@@ -30,19 +30,25 @@ int main(int argc, char **argv) {
     yy::parser p;
     
     int result = p.parse();
-    
-    if (result == 0) {
-        std::cout << "\033[31;42mSuccess: File completely parsed!\033[0m" << std::endl;
-        if (programAST){
-            std::cout << *programAST << std::endl;
-            programAST->sem_analyze();
-            
-        }
-        if (ErrorHandler::getErrorCount() == 0) {
-            std::cout << "Semantic analysis completed successfully!" << std::endl;
-        }
-        else std::cout << "Warning: Parsing succeeded, but AST is null." << std::endl;
+
+    if (result != 0) {
+        return result; 
     }
     
-    return result;
+    if (programAST) {
+        // std::cout << *programAST << std::endl;
+        programAST->sem_analyze();
+    } else {
+        std::cerr << "Warning: Parsing succeeded, but AST is null." << std::endl;
+        return 1;
+    }
+    
+    if (ErrorHandler::getErrorCount() == 0) {
+        std::cout << "Semantic analysis completed successfully!" << std::endl;
+        return 0;
+    } else {
+        std::cerr << "Semantic analysis failed with " 
+                  << ErrorHandler::getErrorCount() << " errors." << std::endl;
+        return 1;
+    }
 }

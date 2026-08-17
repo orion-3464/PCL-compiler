@@ -492,6 +492,7 @@ public:
     LabelDef(std::vector<std::string> i, Loc l)
         : Local(l) { ids = i; }
 
+    const std::vector<std::string>& getIds() const;
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:

@@ -59,6 +59,7 @@ public:
     void exitScope();
     bool insert(const std::string &s, const std::variant<Variable, Parameter, RoutineName, Label>& v);
     SymTabEntry* lookup(const std::string& s);
+    unsigned int getCurrentDepth() const;
 private:
     std::unordered_map<std::string, std::vector<SymTabEntry>> symbol_table;
     std::vector<std::vector<std::string>> scopes;

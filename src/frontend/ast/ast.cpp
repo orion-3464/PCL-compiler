@@ -167,6 +167,9 @@ void Goto::sem_analyze() {
         ErrorHandler::error(getLoc(), "Symbol used in \"goto\" statement is not as label");
         return;
     }
+    if (label_entry->depth != symtab.getCurrentDepth()) {
+        ErrorHandler::error(getLoc(), "Illegal cross-scope jump: label '" + label + "' is not declared in the current scope");
+    }
 }
 
 void Goto::printNode(std::ostream& out) const {
@@ -859,7 +862,19 @@ void PointerType::printNode(std::ostream& out) const {
 
 void Body::sem_analyze() {
     symtab.enterScope();
-    for(const auto& local : locals) local->sem_analyze();
+    for (const auto& local : locals) {
+        if (LabelDef* label_def = dynamic_cast<LabelDef*>(local.get())) {
+            for (const auto& id : label_def->getIds()) {
+                SymTabEntry* entry = symtab.lookup(id);
+                if (entry) {
+                    Label* lbl = std::get_if<Label>(&entry->sym_info);
+                    if (lbl && !lbl->is_defined) {
+                        ErrorHandler::error(local->getLoc(), "Label '" + id + "' was declared but never defined in the body");
+                    }
+                }
+            }
+        }
+    }
     block->sem_analyze();
     symtab.exitScope();
 }
@@ -893,6 +908,10 @@ void Var::printNode(std::ostream& out) const {
 }
 
 /* ==================== LabelDef ==================== */
+
+const std::vector<std::string>& LabelDef::getIds() const {
+    return ids;
+}
 
 void LabelDef::sem_analyze() {
     for (const auto& id : ids) 
