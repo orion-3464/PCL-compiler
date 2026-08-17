@@ -1,7 +1,12 @@
 #include "ast.hpp"
 #include "error.hpp"
+#include "symbol.hpp"
 
 #include <iostream>
+#include <sstream>
+
+extern SymbolTable symtab;
+static std::vector<const Type*> routine_returns_stack;
 
 std::string to_string(BinOp op) {
     switch(op) {
@@ -126,7 +131,22 @@ void While::printNode(std::ostream& out) const {
 /* ==================== Labeling ==================== */
 
 void Labeling::sem_analyze() {
-    // TODO:: scopes and symbol table
+    SymTabEntry* label_entry = symtab.lookup(label);
+    if(!label_entry) {
+        ErrorHandler::error(getLoc(), "Label not declared");
+        return;
+    }
+    Label* label_info = std::get_if<Label>(&label_entry->sym_info);
+    if(!label_info) {
+        ErrorHandler::error(getLoc(), "Symbol declared but not as label");
+        return;
+    }
+    if (label_info->is_defined) {
+        ErrorHandler::error(getLoc(), "Label '" + label + "' is already defined");
+        return;
+    }
+
+    label_info->is_defined=true;
     code->sem_analyze();
 }
 
@@ -137,7 +157,16 @@ void Labeling::printNode(std::ostream& out) const {
 /* ==================== Goto ==================== */
 
 void Goto::sem_analyze() {
-    // TODO:: scopes and symbol table
+    SymTabEntry* label_entry = symtab.lookup(label);
+    if(!label_entry) {
+        ErrorHandler::error(getLoc(), "Target label not declared");
+        return;
+    }
+    Label* label_info = std::get_if<Label>(&label_entry->sym_info);
+    if(!label_info) {
+        ErrorHandler::error(getLoc(), "Symbol used in \"goto\" statement is not as label");
+        return;
+    }
 }
 
 void Goto::printNode(std::ostream& out) const {
@@ -145,10 +174,6 @@ void Goto::printNode(std::ostream& out) const {
 }
 
 /* ==================== Return ==================== */
-
-void Return::sem_analyze() {
-    // TODO:: scopes and symbol table
-}
 
 void Return::printNode(std::ostream& out) const {
     out << "Return()"; 
@@ -214,8 +239,21 @@ void Dispose::printNode(std::ostream& out) const {
 /* ==================== Id ==================== */
 
 void Id::sem_analyze() {
-    // TODO: symbol table lookup
-    return;
+    SymTabEntry* id_entry = symtab.lookup(name);
+    if (!id_entry) {
+        ErrorHandler::error(getLoc(), "Name " + name + " not declared");
+        return;
+    }
+    Variable* var_info = std::get_if<Variable>(&id_entry->sym_info);
+    Parameter* par_info = std::get_if<Parameter>(&id_entry->sym_info);
+    if (var_info) {
+        type = var_info->type->cloneType();
+    } 
+    else if (par_info) {
+        type = par_info->type->cloneType();
+    } else {
+        ErrorHandler::error(getLoc(), "Identifier '" + name + "' is not a variable or parameter");
+    }
 }
 
 void Id::printNode(std::ostream& out) const {
@@ -225,8 +263,16 @@ void Id::printNode(std::ostream& out) const {
 /* ==================== Result ==================== */
 
 void Result::sem_analyze() {
-    // TODO: symbol table lookup
-    return;
+    if (routine_returns_stack.empty()) {
+        ErrorHandler::error(getLoc(), "Cannot use \"result\" keyword without a corresponding function definition");
+        return;
+    }
+    const Type* current_ret_type = routine_returns_stack.back();
+    if(!current_ret_type) {
+        ErrorHandler::error(getLoc(), "Cannot use \"result\" keyword in a procedure definition");
+        return;
+    }
+    type = current_ret_type->cloneType();
 }
 
 void Result::printNode(std::ostream& out) const  {
@@ -458,6 +504,75 @@ void Binop::printNode(std::ostream& out) const {
 
 /* ==================== CallProc ==================== */
 
+void CallProc::sem_analyze() {
+    for (const auto& arg : args) arg->sem_analyze();
+
+    SymTabEntry* routine_entry = symtab.lookup(name);
+    if (!routine_entry) {
+        ErrorHandler::error(getLoc(), "Symbol " + name + " not declared");
+        return;
+    }
+    
+    RoutineName* routine_name = std::get_if<RoutineName>(&routine_entry->sym_info);
+    if (!routine_name) {
+        ErrorHandler::error(getLoc(), "Symbol " + name + " not declared as function or procedure");
+        return;
+    }
+
+    if (routine_name->retType) {
+        ErrorHandler::error(getLoc(), "Symbol " + name + " referes to a function not procedure");
+        return;
+    }
+
+    std::vector<Parameter> pars = routine_name->parameters;
+    if (args.size() != pars.size()) {
+        std::ostringstream errorMsg;
+        errorMsg << "Procedure \"" + name + "\" requires " << pars.size()
+                 << "arguments but " << args.size() << " provided";
+        ErrorHandler::error(getLoc(), errorMsg.str());
+        return;
+    }
+
+    for (size_t i = 0; i < pars.size(); ++i) {
+        const Type* arg_type = args[i]->getExprType();
+        const Type* par_type = pars[i].type;
+        
+        if (!arg_type) continue;
+
+        bool is_valid = false;
+        std::string error_reason = "";
+
+        if (pars[i].is_reference) {
+            Lvalue* is_lval = dynamic_cast<Lvalue*>(args[i].get());
+            if (!is_lval) {
+                error_reason = "Argument must be an l-value (passed by reference).";
+            } else {
+                PointerType param_ptr(par_type->cloneType());
+                PointerType arg_ptr(arg_type->cloneType());
+                if (param_ptr.isCompatible(&arg_ptr)) {
+                    is_valid = true;
+                } else {
+                    error_reason = "Type mismatch in pass-by-reference.";
+                }
+            }
+        } else {
+            if (par_type->isCompatible(arg_type)) {
+                is_valid = true;
+            } else {
+                error_reason = "Type mismatch in pass-by-value.";
+            }
+        }
+
+        if (!is_valid) {
+            std::ostringstream errorMsg;
+            errorMsg << "Argument in position " << (i + 1) << ": " << error_reason 
+                     << " Expected: " << *par_type 
+                     << ", but given: " << *arg_type;
+            ErrorHandler::error(args[i]->getLoc(), errorMsg.str());
+        }
+    }
+}
+
 void CallProc::printNode(std::ostream& out) const {
     out << "CallProc( name : " << name << " args: ";
     bool first = true;
@@ -470,6 +585,77 @@ void CallProc::printNode(std::ostream& out) const {
 }
 
 /* ==================== CallFunc ==================== */
+
+void CallFunc::sem_analyze() {
+    for (const auto& arg : args) arg->sem_analyze();
+
+    SymTabEntry* routine_entry = symtab.lookup(name);
+    if (!routine_entry) {
+        ErrorHandler::error(getLoc(), "Symbol " + name + " not declared");
+        return;
+    }
+    
+    RoutineName* routine_name = std::get_if<RoutineName>(&routine_entry->sym_info);
+    if (!routine_name) {
+        ErrorHandler::error(getLoc(), "Symbol " + name + " not declared as function or procedure");
+        return;
+    }
+
+    if (routine_name->retType == nullptr) {
+        ErrorHandler::error(getLoc(), "Symbol '" + name + "' refers to a procedure and cannot be used in an expression");
+        return;
+    }
+
+    std::vector<Parameter> pars = routine_name->parameters;
+    if (args.size() != pars.size()) {
+        std::ostringstream errorMsg;
+        errorMsg << "Procedure \"" + name + "\" requires " << pars.size()
+                 << "arguments but " << args.size() << " provided";
+        ErrorHandler::error(getLoc(), errorMsg.str());
+        return;
+    }
+
+    for (size_t i = 0; i < pars.size(); ++i) {
+        const Type* arg_type = args[i]->getExprType();
+        const Type* par_type = pars[i].type;
+        
+        if (!arg_type) continue;
+
+        bool is_valid = false;
+        std::string error_reason = "";
+
+        if (pars[i].is_reference) {
+            Lvalue* is_lval = dynamic_cast<Lvalue*>(args[i].get());
+            if (!is_lval) {
+                error_reason = "Argument must be an l-value (passed by reference).";
+            } else {
+                PointerType param_ptr(par_type->cloneType());
+                PointerType arg_ptr(arg_type->cloneType());
+                if (param_ptr.isCompatible(&arg_ptr)) {
+                    is_valid = true;
+                } else {
+                    error_reason = "Type mismatch in pass-by-reference.";
+                }
+            }
+        } else {
+            if (par_type->isCompatible(arg_type)) {
+                is_valid = true;
+            } else {
+                error_reason = "Type mismatch in pass-by-value.";
+            }
+        }
+
+        if (!is_valid) {
+            std::ostringstream errorMsg;
+            errorMsg << "Argument in position " << (i + 1) << ": " << error_reason 
+                     << " Expected: " << *par_type 
+                     << ", but given: " << *arg_type;
+            ErrorHandler::error(args[i]->getLoc(), errorMsg.str());
+        }
+    }
+    
+    type = routine_name->retType->cloneType();
+}
 
 void CallFunc::printNode(std::ostream& out) const {
     out << "CallFunc( name : " << name << " args: ";
@@ -671,6 +857,13 @@ void PointerType::printNode(std::ostream& out) const {
 
 /* ==================== Body ==================== */
 
+void Body::sem_analyze() {
+    symtab.enterScope();
+    for(const auto& local : locals) local->sem_analyze();
+    block->sem_analyze();
+    symtab.exitScope();
+}
+
 void Body::printNode(std::ostream& out) const  {
     out << "Body(\n";
     for (const auto& local : locals) {
@@ -681,6 +874,17 @@ void Body::printNode(std::ostream& out) const  {
 
 /* ==================== Var ==================== */
 
+void Var::sem_analyze() {
+    const Type* variables_type = type.get();
+    if (!variables_type->isComplete()) {
+        ErrorHandler::error(getLoc(), "Variable declarations must have a complete type");
+        return;
+    }
+    for (const auto& id : ids)
+        if (!symtab.insert(id, Variable(variables_type)))
+            ErrorHandler::error(getLoc(), "Variable " + id + " is already declared in current scope");
+}
+
 void Var::printNode(std::ostream& out) const {
     out << "Var( names: ";
     for(const auto& i : ids)
@@ -689,6 +893,12 @@ void Var::printNode(std::ostream& out) const {
 }
 
 /* ==================== LabelDef ==================== */
+
+void LabelDef::sem_analyze() {
+    for (const auto& id : ids) 
+        if (!symtab.insert(id, Label(false)))
+            ErrorHandler::error(getLoc(), "Label " + id + " is already declared in current scope");
+}
 
 void LabelDef::printNode(std::ostream& out) const {
     out << "LabelDef( names: ";
@@ -702,6 +912,29 @@ void LabelDef::printNode(std::ostream& out) const {
 }
 
 /* ==================== Formal ==================== */
+
+const Type* Formal::getFormalsType() const {
+    return (const Type*)type.get();
+}
+
+const std::vector<std::string>& Formal::getIds() const {
+    return ids;
+}
+
+bool Formal::isReference() const {
+    return is_reference;
+}
+
+void Formal::sem_analyze() {
+    const Type* formal_type = type.get();
+    if (!is_reference && formal_type->getType() == PCLtype::Array) {
+        ErrorHandler::error(getLoc(), "Arrays can only be passed by reference");
+        return;
+    }
+    for (const auto& id : ids)
+        if(!symtab.insert(id, Parameter(is_reference, formal_type)))
+            ErrorHandler::error(getLoc(), "Current parameter id: " + id + " was previously declared in the current scope");
+}
 
 void Formal::printNode(std::ostream& out) const  {
     out << "Formal( ";
@@ -724,7 +957,75 @@ const Type* Header::getRetType() const {
     return return_type.get();
 }
 
+void Header::declare_parameters() {
+    for (const auto& formal : formals)
+        formal->sem_analyze();
+}
+
 /* ==================== RoutineDef ==================== */
+
+void RoutineDef::sem_analyze() {
+    const std::string& name = header->getName();
+    const Type* ret_type = header->getRetType();
+
+    std::string funcproc = (ret_type) ? "Function " : "Procedure ";
+    bool is_forward = (body==nullptr);
+
+    std::vector<Parameter> parameters;
+    for (const auto& formal : header->getFormals()) {
+        for (size_t i = 0; i < formal->getIds().size(); ++i) {
+            parameters.push_back(Parameter(formal->isReference(), formal->getFormalsType()));
+        }
+    }
+
+    RoutineName routine_name(is_forward, ret_type, parameters);
+    
+    if (!symtab.insert(name, routine_name)) {
+        SymTabEntry* prev_routine_name_entry = symtab.lookup(name);
+        if (prev_routine_name_entry) {
+            if (RoutineName* prev_routine_name = std::get_if<RoutineName>(&prev_routine_name_entry->sym_info)) {               
+                if (prev_routine_name->is_forward && !is_forward) {
+                    bool definitions_match = true;
+                    if ((prev_routine_name->retType == nullptr) != (ret_type == nullptr)) {
+                        definitions_match = false;
+                    } else if (ret_type != nullptr && !prev_routine_name->retType->isSame(ret_type)) {
+                        definitions_match = false;
+                    }
+                    
+                    if (prev_routine_name->parameters.size() != parameters.size()) {
+                        definitions_match = false;
+                    } else {
+                        for (size_t i = 0; i < parameters.size(); ++i) {
+                            if (prev_routine_name->parameters[i].is_reference != parameters[i].is_reference ||
+                                !prev_routine_name->parameters[i].type->isSame(parameters[i].type)) {
+                                definitions_match = false;
+                                break;
+                            }
+                        }
+                    }
+                    if (definitions_match) {
+                        prev_routine_name->is_forward = false;
+                    } else {
+                        ErrorHandler::error(getLoc(), funcproc + "'" + name + "' signature does not match its forward declaration");
+                    }
+                } else {
+                    ErrorHandler::error(getLoc(), funcproc + "'" + name + "' was previously defined in the current scope");
+                }
+            } else {
+                ErrorHandler::error(getLoc(), "'" + name + "' is already declared as a different symbol in the current scope");
+            }
+        }
+    }
+            
+    if (!is_forward) {
+        symtab.enterScope();
+        header->declare_parameters();
+        routine_returns_stack.push_back(ret_type);
+        body->sem_analyze();
+        routine_returns_stack.pop_back();
+        symtab.exitScope();
+    }
+}
 
 void RoutineDef::printNode(std::ostream& out) const {
     const std::string& name = header->getName();
@@ -749,6 +1050,10 @@ void RoutineDef::printNode(std::ostream& out) const {
 }
 
 /* ==================== Program ==================== */
+
+void Program::sem_analyze() {
+    if (body) body->sem_analyze();
+}
 
 void Program::printNode(std::ostream& out) const {
     out << "Program( " << name << "\n" << *body << "\n)";

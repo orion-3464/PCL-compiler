@@ -248,7 +248,6 @@ class Return : public Stmt {
 public:
     Return(Loc l) : Stmt(l) {}
 
-    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 };
 
@@ -435,7 +434,8 @@ public:
     CallProc(std::string n,
              std::vector<std::unique_ptr<Expr>> a,
              Loc l) : Stmt(l), name(n), args(std::move(a)) {}
-    
+
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::string name;
@@ -448,6 +448,7 @@ public:
              std::vector<std::unique_ptr<Expr>> a,
              Loc l) : Rvalue(l), name(n), args(std::move(a)) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::string name;
@@ -466,6 +467,7 @@ public:
          Loc l)
         : AST(l), locals(std::move(locs)), block(std::move(blk)) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::vector<std::unique_ptr<Local>> locals;
@@ -478,6 +480,7 @@ public:
         std::unique_ptr<Type> t,
         Loc l) : Local(l), type(std::move(t)) { ids = i; }
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::unique_ptr<Type> type;
@@ -489,6 +492,7 @@ public:
     LabelDef(std::vector<std::string> i, Loc l)
         : Local(l) { ids = i; }
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::vector<std::string> ids;
@@ -502,8 +506,12 @@ public:
            Loc l) 
         : AST(l), ids(std::move(i)), type(std::move(t)), is_reference(is_ref) {}
 
+    const Type* getFormalsType() const;
+    const std::vector<std::string>& getIds() const;
+    bool isReference() const;
+    
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
-
 private:
     std::vector<std::string> ids;
     std::unique_ptr<Type> type;
@@ -519,6 +527,7 @@ public:
     const std::string& getName() const;
     const std::vector<std::unique_ptr<Formal>>& getFormals() const;
     const Type* getRetType() const;
+    void declare_parameters();
 private:
     std::string name;
     std::vector<std::unique_ptr<Formal>> formals;
@@ -532,6 +541,7 @@ public:
                Loc l)                          // and header
         : Local(l), header(std::move(h)), body(std::move(b)) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::unique_ptr<Header> header;
@@ -543,6 +553,7 @@ public:
     Program(std::string n, std::unique_ptr<Body> b, Loc l)
         : AST(l), name(n), body(std::move(b)) {}
 
+    void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
     std::string name;

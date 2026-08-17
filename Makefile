@@ -6,7 +6,7 @@ CXX := g++
 CXXFLAGS := -g -Wall -Wextra -Wpedantic -std=c++23 -O3 -I./src -I./$(BUILD) -I./src/frontend/ast
 
 CC := gcc
-CFLAGS := -O2 -Wall -Wextra -Wpedantic -std=c23 -I./src/libpcl -fno-builtin-trunc -fno-builtin-round
+CFLAGS := -g -Wall -Wextra -Wpedantic -std=c23 -O2 -I./src/libpcl -fno-builtin-trunc -fno-builtin-round
 
 default: pcl libpcl
 
