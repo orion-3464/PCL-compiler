@@ -5,10 +5,36 @@
 #include <ostream>
 #include <string>
 #include <vector>
+#include <optional>
+#include <map>
+
+#include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Module.h>
+#include <llvm/IR/Type.h>
+#include <llvm/IR/Verifier.h>
+#include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/Constants.h>
+#include <llvm/ADT/STLExtras.h>
+#include <llvm/ADT/APFloat.h>
 
 #include "location.hpp"
 
+using llvm::Value;
+
 typedef yy::location Loc;
+
+struct CompilerOptions {
+    bool final_code_stdout,
+        imm_code_stdout,
+        optimize;
+    std::string ex_name, filename;
+    CompilerOptions() : final_code_stdout(false),
+                        imm_code_stdout(false),
+                        optimize(false), ex_name(""),
+                        filename("") {}
+};
 
 class AST {
 public:
@@ -17,8 +43,26 @@ public:
     virtual ~AST() = default;
     Loc getLoc() const { return loc; }
     virtual void sem_analyze() {}
+    virtual Value* codegen() const { return nullptr; }
     virtual void printNode(std::ostream &out) const = 0;
 
+protected:
+    // LLVM utilities
+    static std::unique_ptr<llvm::LLVMContext> TheContext;
+    static std::unique_ptr<llvm::Module> TheModule;
+    static std::unique_ptr<llvm::IRBuilder<>> Builder;
+    static std::map<std::string, Value *> NamedValues;
+
+    // LLVM types
+    static llvm::Type *i8;
+    static llvm::Type *i32;
+
+    // PCL Library Function Signatures
+    static llvm::Function *TheWriteString;
+
+    // Utilities
+    static llvm::ConstantInt* c32(int n);
+    
 private:
     Loc loc; 
 };
@@ -148,8 +192,10 @@ class Expr : public AST {
 public:
     Expr(Loc l) : AST(l) {}
 
-    const Type* getExprType() { return type.get(); }
+    const Type* getExprType() const;
     void type_check(Type t);
+
+    virtual std::optional<int> getConstValue() const;
 protected:
     std::unique_ptr<Type> type;
 };
@@ -171,6 +217,8 @@ public:
     void append(std::unique_ptr<Stmt> s);
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+
+    Value* codegen() const override;
 private:
     std::vector<std::unique_ptr<Stmt>> stmts;
 };
@@ -299,6 +347,7 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override;
 private:
     std::string value;
 };
@@ -332,6 +381,8 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    std::optional<int> getConstValue() const override;
+    Value* codegen() const override;
 private:
     unsigned long num;
 };
@@ -408,6 +459,7 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    std::optional<int> getConstValue() const override;
 private:
     UnOp op;
     std::unique_ptr<Expr> expr;
@@ -423,6 +475,7 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    std::optional<int> getConstValue() const override;
 private:
     std::unique_ptr<Expr> left;
     BinOp op;
@@ -437,6 +490,7 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override; 
 private:
     std::string name;
     std::vector<std::unique_ptr<Expr>> args;
@@ -469,6 +523,8 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+
+    Value* codegen() const override;
 private:
     std::vector<std::unique_ptr<Local>> locals;
     std::unique_ptr<Block> block;
@@ -542,6 +598,9 @@ public:
                Loc l)                          // and header
         : Local(l), header(std::move(h)), body(std::move(b)) {}
 
+    bool isForward() const;
+    std::string getName() const;
+    
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 private:
@@ -556,6 +615,9 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override;
+
+    void compile(const CompilerOptions& co);
 private:
     std::string name;
     std::unique_ptr<Body> body;

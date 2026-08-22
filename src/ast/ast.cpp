@@ -4,6 +4,15 @@
 
 #include <iostream>
 #include <sstream>
+#include <filesystem>
+#include <llvm/Support/FileSystem.h>
+#include <llvm/Support/raw_ostream.h>
+
+#include <llvm/Support/TargetSelect.h>
+#include <llvm/Target/TargetMachine.h>
+#include <llvm/MC/TargetRegistry.h>
+#include <llvm/TargetParser/Host.h>
+#include <llvm/IR/LegacyPassManager.h>
 
 extern SymbolTable symtab;
 static std::vector<const Type*> routine_returns_stack;
@@ -37,8 +46,30 @@ std::string to_string(UnOp op) {
     }
 }
 
+/* ==================== AST ==================== */
+
+std::unique_ptr<llvm::LLVMContext> AST::TheContext;
+std::unique_ptr<llvm::Module> AST::TheModule;
+std::unique_ptr<llvm::IRBuilder<>> AST::Builder;
+
+llvm::Type *AST::i8;
+llvm::Type *AST::i32;
+
+llvm::Function *AST::TheWriteString;
+
+llvm::ConstantInt* AST::c32(int n) {
+    return llvm::ConstantInt::get(*TheContext, llvm::APInt(32, n, true));
+}
+
 /* ==================== Expr ==================== */
 
+const Type* Expr::getExprType() const {
+    return type.get();
+}
+
+std::optional<int> Expr::getConstValue() const {
+    return std::nullopt;
+}
 
 /* ==================== Block ==================== */
 
@@ -60,6 +91,12 @@ void Block::printNode(std::ostream& out) const {
         first = false;
     }
     out << " )";
+}
+
+Value* Block::codegen() const {
+//    for (const auto& s: stm// ts)
+        // s->codegen();
+    return nullptr;
 }
 
 /* ==================== Empty  ==================== */
@@ -186,6 +223,13 @@ void Return::printNode(std::ostream& out) const {
 
 void New::sem_analyze() {
     lvl->sem_analyze();
+    
+    Lvalue* is_lvalue = dynamic_cast<Lvalue*>(lvl.get());
+    if(!is_lvalue) {
+        ErrorHandler::error(lvl->getLoc(), "New: Argument must be an l-value");
+        return;
+    }
+    
     const Type* lvl_type = lvl->getExprType();
     const PointerType* lvl_type_ptr = dynamic_cast<const PointerType*>(lvl_type);
     if (!lvl_type_ptr) {
@@ -202,9 +246,15 @@ void New::sem_analyze() {
         const Type* size_type = size->getExprType();
         if (size_type->getType() != PCLtype::Integer)
             ErrorHandler::error(lvl->getLoc(), "New: Allocation size must be of type integer");
-        // TODO: If value of size can be computed at compile time, check if it is positive
         if (tar_type->getType() != PCLtype::Array || tar_type->isComplete())
             ErrorHandler::error(lvl->getLoc(), "New: Pointer must point to an incomplete array when allocation size is provided");
+        
+        auto const_size = size->getConstValue();
+        if (const_size.has_value()) {
+            if (const_size.value() <= 0) {
+                ErrorHandler::error(size->getLoc(), "New: Allocation size must be a positive integer");
+            }
+        }
     }
 }
 
@@ -217,8 +267,14 @@ void New::printNode(std::ostream& out) const {
 /* ==================== Dispose ==================== */
 
 void Dispose::sem_analyze() {
-    // TODO: check if a new on the symbol an scope was performed
     lvl->sem_analyze();
+
+    Lvalue* is_lvalue = dynamic_cast<Lvalue*>(lvl.get());
+    if(!is_lvalue) {
+        ErrorHandler::error(lvl->getLoc(), "Dispose: Argument must be an l-value");
+        return;
+    }
+    
     const Type* lvl_type = lvl->getExprType();
     const PointerType* lvl_type_ptr = dynamic_cast<const PointerType*>(lvl_type);
     if (!lvl_type_ptr) {
@@ -295,10 +351,13 @@ void Str::printNode(std::ostream& out) const {
     out << "String( " << value << " )";
 }
 
+Value* Str::codegen() const {
+    return Builder->CreateGlobalStringPtr(value);
+}
+
 /* ==================== Access ==================== */
 
 void Access::sem_analyze() {
-    // TODO: check symbol table if array was previously declared, size etc
     array_base->sem_analyze();
     index->sem_analyze();
 
@@ -314,6 +373,21 @@ void Access::sem_analyze() {
         return;
     }
 
+    auto const_index = index->getConstValue();
+    if (const_index.has_value()) {
+        int idx_val = const_index.value();
+     
+        if (idx_val < 0)
+            ErrorHandler::error(index->getLoc(), "Array access: Index cannot be negative");
+     
+        else if (array_base_ptr->isComplete()) {
+            if (idx_val >= array_base_ptr->getLength()) {
+                ErrorHandler::error(index->getLoc(), "Array access: Index " + std::to_string(idx_val) + 
+                                                     " is out of bounds (array size is " + 
+                                                     std::to_string(array_base_ptr->getLength()) + ")");
+            }
+        }
+    }
     type = array_base_ptr->getElementType()->cloneType();
 }
 
@@ -324,7 +398,6 @@ void Access::printNode(std::ostream& out) const {
 /* ==================== Deref ==================== */
 
 void Deref::sem_analyze() {
-    // TODO: check symbol table if pointer was previously declared
     pointer->sem_analyze();
     const Type* pointer_type = pointer->getExprType();
 
@@ -354,6 +427,14 @@ void Const::sem_analyze() {
 
 void Const::printNode(std::ostream& out) const {
     out << "Const( " << num << " )";
+}
+
+std::optional<int> Const::getConstValue() const {
+    return num;
+}
+
+Value* Const::codegen() const {
+    return c32(num);
 }
 
 /* ==================== Bool ==================== */
@@ -443,6 +524,25 @@ void Unop::printNode(std::ostream& out) const {
     out << "Unop( " << to_string(op) << ", " << *expr << " )";
 }
 
+std::optional<int> Unop::getConstValue() const {
+    std::optional<int> c = expr->getConstValue();
+
+    if (c.has_value()) {
+        switch (op) {
+            case UnOp::Plus:
+                return c.value();
+                break;
+            case UnOp::Minus:
+                return -c.value();
+                break;
+            default:
+                return std::nullopt;
+                break;
+        }
+    }
+    return std::nullopt;
+}
+
 /* ==================== Binop ==================== */
 
 void Binop::sem_analyze() { 
@@ -503,6 +603,38 @@ void Binop::sem_analyze() {
 void Binop::printNode(std::ostream& out) const {
     out << "Binop( " << to_string(op) << " | "
         << *left << " | " << *right << " )";
+}
+
+std::optional<int> Binop::getConstValue() const {
+    std::optional<int> lconst = left->getConstValue();
+    std::optional<int> rconst = right->getConstValue();
+
+    if (lconst.has_value() && rconst.has_value()) {
+        switch (op) {
+            case BinOp::Add:
+                return lconst.value()+rconst.value();
+                break;
+            case BinOp::Sub:
+                return lconst.value()-rconst.value();
+                break;
+            case BinOp::Mul:
+                return lconst.value()*rconst.value();
+                break;
+            case BinOp::Div:
+                return lconst.value()/rconst.value();
+                break;
+            case BinOp::IntDiv:
+                return lconst.value()/rconst.value();
+                break;
+            case BinOp::Mod:
+                return lconst.value()%rconst.value();
+                break;
+            default:
+                return std::nullopt;
+                break;
+        }
+    }
+    return std::nullopt;
 }
 
 /* ==================== CallProc ==================== */
@@ -585,6 +717,11 @@ void CallProc::printNode(std::ostream& out) const {
         first = false;
     }
     out << " )";
+}
+
+Value* CallProc::codegen() const {
+    // Builder->CreateCall(TheWriteString, {});
+    return nullptr;
 }
 
 /* ==================== CallFunc ==================== */
@@ -862,6 +999,11 @@ void PointerType::printNode(std::ostream& out) const {
 
 void Body::sem_analyze() {
     symtab.enterScope();
+    
+    for (const auto& local : locals)
+        local->sem_analyze();
+    block->sem_analyze();
+
     for (const auto& local : locals) {
         if (LabelDef* label_def = dynamic_cast<LabelDef*>(local.get())) {
             for (const auto& id : label_def->getIds()) {
@@ -869,13 +1011,24 @@ void Body::sem_analyze() {
                 if (entry) {
                     Label* lbl = std::get_if<Label>(&entry->sym_info);
                     if (lbl && !lbl->is_defined) {
-                        ErrorHandler::error(local->getLoc(), "Label '" + id + "' was declared but never defined in the body");
+                        ErrorHandler::error(local->getLoc(), "Label '"+id+"' was declared but never defined in the body");
+                    }
+                }
+            }
+        }
+        else if (RoutineDef* routine_def = dynamic_cast<RoutineDef*>(local.get())) {
+            if (routine_def->isForward()) {
+                SymTabEntry* entry = symtab.lookup(routine_def->getName());
+                if (entry) {
+                    RoutineName* rtn = std::get_if<RoutineName>(&entry->sym_info);
+                    if (rtn && rtn->is_forward) {
+                        ErrorHandler::error(routine_def->getLoc(), "Routine '"+routine_def->getName()+"' was forward declared but never defined");
                     }
                 }
             }
         }
     }
-    block->sem_analyze();
+    
     symtab.exitScope();
 }
 
@@ -885,6 +1038,11 @@ void Body::printNode(std::ostream& out) const  {
         out << "  " << *local << "\n";
     }
     out << "  " << *block << "\n)";
+}
+
+Value* Body::codegen() const {
+    // TODO:: Locals codegen
+    return block->codegen();
 }
 
 /* ==================== Var ==================== */
@@ -983,6 +1141,14 @@ void Header::declare_parameters() {
 
 /* ==================== RoutineDef ==================== */
 
+bool RoutineDef::isForward() const {
+    return (body==nullptr);
+}
+
+std::string RoutineDef::getName() const {
+    return header->getName();
+}
+
 void RoutineDef::sem_analyze() {
     const std::string& name = header->getName();
     const Type* ret_type = header->getRetType();
@@ -990,6 +1156,11 @@ void RoutineDef::sem_analyze() {
     std::string funcproc = (ret_type) ? "Function " : "Procedure ";
     bool is_forward = (body==nullptr);
 
+    if (ret_type!=nullptr && ret_type->getType()==PCLtype::Array) {
+        ErrorHandler::error(getLoc(), "Subprograms are not allowed to have \"array\" as a return type");
+        return;
+    }    
+    
     std::vector<Parameter> parameters;
     for (const auto& formal : header->getFormals()) {
         for (size_t i = 0; i < formal->getIds().size(); ++i) {
@@ -1077,3 +1248,131 @@ void Program::sem_analyze() {
 void Program::printNode(std::ostream& out) const {
     out << "Program( " << name << "\n" << *body << "\n)";
 }
+
+Value* Program::codegen() const {
+    return body->codegen();
+}
+
+void Program::compile(const CompilerOptions& co) {
+    TheContext = std::make_unique<llvm::LLVMContext>();
+    TheModule = std::make_unique<llvm::Module>("PCL Program", *TheContext);
+    Builder = std::make_unique<llvm::IRBuilder<>>(*TheContext);
+
+    // Initialize LLVM IR to x86 Assembly Compiler
+    llvm::InitializeAllTargetInfos();
+    llvm::InitializeAllTargets();
+    llvm::InitializeAllTargetMCs();
+    llvm::InitializeAllAsmParsers();
+    llvm::InitializeAllAsmPrinters();
+    
+    auto TargetTriple = llvm::sys::getDefaultTargetTriple();
+    TheModule->setTargetTriple(TargetTriple);
+
+    std::string Error;
+    auto Target = llvm::TargetRegistry::lookupTarget(TargetTriple, Error);
+    if (!Target) {
+        llvm::errs() << Error;
+        return;
+    }
+    auto CPU = "generic";
+    auto Features = "";
+    llvm::TargetOptions opt;
+    auto RM = std::optional<llvm::Reloc::Model>();
+    auto TheTargetMachine = Target->createTargetMachine(TargetTriple, CPU, Features, opt, RM);
+    
+
+    TheModule->setDataLayout(TheTargetMachine->createDataLayout());
+
+    // Initialize Compilation to LLVM IR
+    TheModule->setSourceFileName(co.filename);
+    
+    // Initialize types
+    i8  = llvm::IntegerType::get(*TheContext, 8);
+    i32 = llvm::IntegerType::get(*TheContext, 32);
+
+    llvm::FunctionType *writeString_type =
+        llvm::FunctionType::get(llvm::Type::getVoidTy(*TheContext),
+                                {llvm::PointerType::get(i8, 0)}, false);
+    TheWriteString =
+        llvm::Function::Create(writeString_type, llvm::Function::ExternalLinkage,
+                       "writeString", TheModule.get());
+
+    llvm::FunctionType *main_type = llvm::FunctionType::get(i32, {}, false);
+    llvm::Function *main =
+        llvm::Function::Create(main_type, llvm::Function::ExternalLinkage,
+                       "main", TheModule.get());
+
+    llvm::BasicBlock *BB = llvm::BasicBlock::Create(*TheContext, "entry", main);
+    Builder->SetInsertPoint(BB);
+
+    codegen();
+    Builder->CreateRet(c32(0));
+
+    bool bad = verifyModule(*TheModule, &llvm::errs());
+    if (bad) {
+      std::cerr << "The IR is bad!" << std::endl;
+      TheModule->print(llvm::errs(), nullptr);
+      std::exit(1);
+    }
+
+    // Output of Compilation
+    std::filesystem::path p = co.filename;
+    std::string fname = co.filename;
+    
+    if (co.imm_code_stdout)
+        TheModule->print(llvm::outs(), nullptr);
+    else {
+        
+        p.replace_extension(".imm");
+        std::string imm_filename = p.string();
+
+        std::error_code EC;
+        llvm::raw_fd_ostream dest(imm_filename, EC, llvm::sys::fs::OF_None);
+
+        if (EC) {
+            llvm::errs() << "Could not open file: " << EC.message() << "\n";
+            std::exit(1);
+        }
+
+        TheModule->print(dest, nullptr);
+    }
+    {
+        std::unique_ptr<llvm::raw_fd_ostream> file_stream;
+        llvm::raw_pwrite_stream *dest_stream;    
+        llvm::legacy::PassManager CodeGenPass;
+    
+        if (co.final_code_stdout) dest_stream = &llvm::outs();
+        else {
+            p.replace_extension(".asm");
+            std::string f_filename = p.string();
+
+            std::error_code EC;
+            file_stream = std::make_unique<llvm::raw_fd_ostream>(f_filename, EC, llvm::sys::fs::OF_None);
+
+            if (EC) {
+                llvm::errs() << "Could not open file: " << EC.message() << "\n";
+                std::exit(1);
+            }
+            dest_stream = file_stream.get();
+        }
+        if (TheTargetMachine->addPassesToEmitFile(CodeGenPass, *dest_stream, nullptr, llvm::CodeGenFileType::AssemblyFile)) {
+            llvm::errs() << "Can't emit a file of this type\n";
+            return;
+        }
+        CodeGenPass.run(*TheModule);
+    }
+
+    if (!co.final_code_stdout && !co.imm_code_stdout) {
+        p.replace_extension(".asm");
+        std::string f_filename = p.string();
+        std::string exec_name = (co.ex_name.empty()) ?
+            (p.parent_path() / "a.out").string() :
+            co.ex_name;
+        std::string cmd = "gcc -x assembler "+f_filename+" -x none build/libpcl.a -o "+exec_name;
+      
+        if (std::system(cmd.c_str())) {
+            std::cerr << "Error: Linking failed!" << std::endl;
+            std::exit(1);
+        }
+    }
+} 

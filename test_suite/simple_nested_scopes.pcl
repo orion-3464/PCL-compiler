@@ -1,0 +1,6 @@
+program nested_scopes;
+begin
+begin
+end
+end
+.

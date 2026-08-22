@@ -1,6 +1,7 @@
 #include <iostream>
 #include <cstdio>
 #include <cstdlib>
+#include <unistd.h>
 
 #include "parser.hpp" 
 #include "ast.hpp"
@@ -12,21 +13,52 @@ extern void yyrestart(FILE *inp);
 extern std::unique_ptr<Program> programAST;
 SymbolTable symtab;
 
-int main(int argc, char **argv) {
-    if (argc > 1) {
-        FILE *file = std::fopen(argv[1], "r");
+int main(int argc, char* argv[]) {
+    int opt;
+    CompilerOptions co;
+        
+    while ((opt=getopt(argc, argv, "o:Ofi")) != -1) {
+        switch (opt) {
+        case 'O':
+            co.optimize = true;
+            break;
+        case 'f':
+            co.final_code_stdout = true;
+            break;
+        case 'i':
+            co.imm_code_stdout = true;
+            break;
+        case 'o':
+            co.ex_name = optarg;
+            break;
+        default:
+            std::cerr << "Usage: ./pclc [-Ofi] [-o <exec_name>]"
+                      << std::endl;
+            std::exit(1);
+        }
+    }
+
+    if (co.imm_code_stdout || co.final_code_stdout) {
+        yyin = stdin;
+    } 
+    else {
+        if (optind >= argc) {
+            std::cerr << "\033[91mError: No input file given\033[0m" << std::endl;
+            std::cerr << "Usage: ./pclc [-Ofi] [-o <exec_name>] <filename>" << std::endl;
+            std::exit(1);
+        }
+        
+        FILE *file = std::fopen(argv[optind], "r");
         if (!file) {
             std::cerr << "\033[91mError: Could not open file "
-                      << argv[1] << "\033[0m" << std::endl;
-            return 1;
+                      << argv[optind] << "\033[0m" << std::endl;
+            std::exit(1);
         }
         yyin = file;
-        yyrestart(yyin); 
-    }
-    else {
-        yyin = stdin;
+        co.filename = argv[optind];
     }
     
+    yyrestart(yyin);    
     yy::parser p;
     
     int result = p.parse();
@@ -44,7 +76,8 @@ int main(int argc, char **argv) {
     }
     
     if (ErrorHandler::getErrorCount() == 0) {
-        std::cout << "Semantic analysis completed successfully!" << std::endl;
+        //std::cout << "Semantic analysis completed successfully!" << std::endl;
+        programAST->compile(co);
         return 0;
     } else {
         std::cerr << "Semantic analysis failed with " 
