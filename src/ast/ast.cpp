@@ -1,18 +1,12 @@
-#include "ast.hpp"
-#include "error.hpp"
-#include "symbol.hpp"
+#include "ast/ast.hpp"
+#include "ast/error.hpp"
+#include "ast/symbol.hpp"
+
+#include "backend/codegen.hpp" 
 
 #include <iostream>
 #include <sstream>
 #include <filesystem>
-#include <llvm/Support/FileSystem.h>
-#include <llvm/Support/raw_ostream.h>
-
-#include <llvm/Support/TargetSelect.h>
-#include <llvm/Target/TargetMachine.h>
-#include <llvm/MC/TargetRegistry.h>
-#include <llvm/TargetParser/Host.h>
-#include <llvm/IR/LegacyPassManager.h>
 
 extern SymbolTable symtab;
 static std::vector<const Type*> routine_returns_stack;
@@ -44,21 +38,6 @@ std::string to_string(UnOp op) {
         case UnOp::Minus: return "-";
         default: return "unknown";
     }
-}
-
-/* ==================== AST ==================== */
-
-std::unique_ptr<llvm::LLVMContext> AST::TheContext;
-std::unique_ptr<llvm::Module> AST::TheModule;
-std::unique_ptr<llvm::IRBuilder<>> AST::Builder;
-
-llvm::Type *AST::i8;
-llvm::Type *AST::i32;
-
-llvm::Function *AST::TheWriteString;
-
-llvm::ConstantInt* AST::c32(int n) {
-    return llvm::ConstantInt::get(*TheContext, llvm::APInt(32, n, true));
 }
 
 /* ==================== Expr ==================== */
@@ -94,8 +73,8 @@ void Block::printNode(std::ostream& out) const {
 }
 
 Value* Block::codegen() const {
-//    for (const auto& s: stm// ts)
-        // s->codegen();
+    for (const auto& s: stmts)
+         s->codegen();
     return nullptr;
 }
 
@@ -352,7 +331,7 @@ void Str::printNode(std::ostream& out) const {
 }
 
 Value* Str::codegen() const {
-    return Builder->CreateGlobalStringPtr(value);
+    return CodeGen::Builder->CreateGlobalStringPtr(value);
 }
 
 /* ==================== Access ==================== */
@@ -434,7 +413,7 @@ std::optional<int> Const::getConstValue() const {
 }
 
 Value* Const::codegen() const {
-    return c32(num);
+    return CodeGen::c32(num);
 }
 
 /* ==================== Bool ==================== */
@@ -447,6 +426,10 @@ void Bool::printNode(std::ostream& out) const {
     out << "Bool( " << val << " )";
 }
 
+Value* Bool::codegen() const {
+    return llvm::ConstantInt::getBool(*CodeGen::TheContext, val);
+}
+
 /* ==================== Real ==================== */
 
 void Real::sem_analyze() {
@@ -455,6 +438,10 @@ void Real::sem_analyze() {
 
 void Real::printNode(std::ostream& out) const {
     out << "Real( " << val << " )";
+}
+
+Value* Real::codegen() const {
+    return CodeGen::f64(val);
 }
 
 /* ==================== Char ==================== */
@@ -467,6 +454,10 @@ void Char::printNode(std::ostream& out) const {
     out << "Char( " << val << " )";
 }
 
+Value* Char::codegen() const {
+    return llvm::ConstantInt::get(*CodeGen::TheContext, llvm::APInt(8, val, false));
+}
+
 /* ==================== Nil ==================== */
 
 void Nil::sem_analyze() {
@@ -475,6 +466,11 @@ void Nil::sem_analyze() {
 
 void Nil::printNode(std::ostream& out) const {
     out << "Nil()";
+}
+
+Value* Nil::codegen() const {
+    llvm::PointerType* nullPtrType = llvm::PointerType::getUnqual(*CodeGen::TheContext);
+    return llvm::ConstantPointerNull::get(nullPtrType);
 }
 
 /* ==================== Ref ==================== */
@@ -496,6 +492,10 @@ void Ref::sem_analyze() {
 
 void Ref::printNode(std::ostream& out) const {
     out << "Ref( " << *left_value << " )";
+}
+
+Value* Ref::codegen() const {
+    return left_value->codegen();
 }
 
 /* ==================== Unop ==================== */
@@ -541,6 +541,32 @@ std::optional<int> Unop::getConstValue() const {
         }
     }
     return std::nullopt;
+}
+
+Value* Unop::codegen() const {
+    Value* E = expr->codegen();
+
+    if (expr->getExprType()->getType()==PCLtype::Real) {
+        switch (op) {
+        case UnOp::Plus:
+            return E;
+        case UnOp::Minus:
+            return CodeGen::Builder->CreateFNeg(E, "fnegtmp");
+        default:
+            return nullptr;
+        }
+    } else {
+        switch (op) {
+        case UnOp::Plus:
+            return E;
+        case UnOp::Minus:
+            return CodeGen::Builder->CreateNeg(E, "negtmp");
+        case UnOp::Not:
+            return CodeGen::Builder->CreateNot(E, "nottmp");
+        default:
+            return nullptr;
+        }
+    }
 }
 
 /* ==================== Binop ==================== */
@@ -611,30 +637,95 @@ std::optional<int> Binop::getConstValue() const {
 
     if (lconst.has_value() && rconst.has_value()) {
         switch (op) {
-            case BinOp::Add:
-                return lconst.value()+rconst.value();
-                break;
-            case BinOp::Sub:
-                return lconst.value()-rconst.value();
-                break;
-            case BinOp::Mul:
-                return lconst.value()*rconst.value();
-                break;
-            case BinOp::Div:
-                return lconst.value()/rconst.value();
-                break;
-            case BinOp::IntDiv:
-                return lconst.value()/rconst.value();
-                break;
-            case BinOp::Mod:
-                return lconst.value()%rconst.value();
-                break;
-            default:
-                return std::nullopt;
-                break;
+        case BinOp::Add:
+            return lconst.value()+rconst.value();
+        case BinOp::Sub:
+            return lconst.value()-rconst.value();
+        case BinOp::Mul:
+            return lconst.value()*rconst.value();
+        case BinOp::Div:
+            return lconst.value()/rconst.value();
+        case BinOp::IntDiv:
+            return lconst.value()/rconst.value();
+        case BinOp::Mod:
+            return lconst.value()%rconst.value();
+        default:
+            return std::nullopt;
         }
     }
     return std::nullopt;
+}
+
+Value* Binop::codegen() const {
+    Value* L = left->codegen();
+    Value* R = right->codegen();
+    if (!L || !R) return nullptr;
+
+    bool isLeftReal = (left->getExprType()->getType()==PCLtype::Real);
+    bool isRightReal = (right->getExprType()->getType()==PCLtype::Real);
+    bool isRealOp = (op==BinOp::Div) ? true : (isLeftReal || isRightReal);
+
+    if (isRealOp) {
+        // Casting operands to real
+        if (!isLeftReal) L = CodeGen::Builder->CreateSIToFP(L, CodeGen::r64, "sit_to_fp_l");
+        if (!isRightReal) R = CodeGen::Builder->CreateSIToFP(R, CodeGen::r64, "sit_to_fp_r");
+        
+        switch (op) {
+        case BinOp::Add:
+            return CodeGen::Builder->CreateFAdd(L, R, "faddtmp");
+        case BinOp::Sub:
+            return CodeGen::Builder->CreateFSub(L, R, "fsubtmp");
+        case BinOp::Mul:
+            return CodeGen::Builder->CreateFMul(L, R, "fmultmp");
+        case BinOp::Div:
+            return CodeGen::Builder->CreateFDiv(L, R, "fdivtmp");
+        case BinOp::Eq:
+            return CodeGen::Builder->CreateFCmpOEQ(L, R, "fcmpeqtmp");
+        case BinOp::Neq:
+            return CodeGen::Builder->CreateFCmpONE(L, R, "fcmpneqtmp");
+        case BinOp::Lt:
+            return CodeGen::Builder->CreateFCmpOLT(L, R, "fcmplttmp");
+        case BinOp::Le:
+            return CodeGen::Builder->CreateFCmpOLE(L, R, "fcmpletmp");
+        case BinOp::Gt:
+            return CodeGen::Builder->CreateFCmpOGT(L, R, "fcmpngttmp");
+        case BinOp::Ge:
+            return CodeGen::Builder->CreateFCmpOGE(L, R, "fcmpgetmp");
+        default:
+            return nullptr;
+        }
+    } else {
+        switch (op) {
+        case BinOp::Add:
+            return CodeGen::Builder->CreateAdd(L, R, "addtmp");
+        case BinOp::Sub:
+            return CodeGen::Builder->CreateSub(L, R, "subtmp");
+        case BinOp::Mul:
+            return CodeGen::Builder->CreateMul(L, R, "multmp");
+        case BinOp::IntDiv:
+            return CodeGen::Builder->CreateSDiv(L, R, "sdivtmp");
+        case BinOp::Mod:
+            return CodeGen::Builder->CreateSRem(L, R, "smodtmp");
+        case BinOp::And:
+            return CodeGen::Builder->CreateAnd(L, R, "andtmp");
+        case BinOp::Or:
+            return CodeGen::Builder->CreateOr(L, R, "ortmp");
+        case BinOp::Eq:
+            return CodeGen::Builder->CreateICmpEQ(L, R, "icmpeqtmp");
+        case BinOp::Neq:
+            return CodeGen::Builder->CreateICmpNE(L, R, "icmpneqtmp");
+        case BinOp::Lt:
+            return CodeGen::Builder->CreateICmpSLT(L, R, "icmplttmp");
+        case BinOp::Le:
+            return CodeGen::Builder->CreateICmpSLE(L, R, "icmpletmp");
+        case BinOp::Gt:
+            return CodeGen::Builder->CreateICmpSGT(L, R, "icmpngttmp");
+        case BinOp::Ge:
+            return CodeGen::Builder->CreateICmpSGE(L, R, "icmpgetmp");
+        default:
+            return nullptr;
+        }
+    }    
 }
 
 /* ==================== CallProc ==================== */
@@ -720,8 +811,15 @@ void CallProc::printNode(std::ostream& out) const {
 }
 
 Value* CallProc::codegen() const {
-    // Builder->CreateCall(TheWriteString, {});
-    return nullptr;
+    llvm::Function *CalleeF = CodeGen::TheModule->getFunction("writeString");
+    llvm::Value* dummyString = CodeGen::Builder->CreateGlobalStringPtr("Hello from PCL CallProc!\n");
+
+    // 3. Βάζουμε το argument στη λίστα
+    std::vector<llvm::Value*> ArgsV;
+    ArgsV.push_back(dummyString);
+
+    // 4. Δημιουργούμε την κλήση στο LLVM IR
+    return CodeGen::Builder->CreateCall(CalleeF, ArgsV);
 }
 
 /* ==================== CallFunc ==================== */
@@ -1250,129 +1348,31 @@ void Program::printNode(std::ostream& out) const {
 }
 
 Value* Program::codegen() const {
-    return body->codegen();
+    if (body) body->codegen();
+    return nullptr;
 }
 
 void Program::compile(const CompilerOptions& co) {
-    TheContext = std::make_unique<llvm::LLVMContext>();
-    TheModule = std::make_unique<llvm::Module>("PCL Program", *TheContext);
-    Builder = std::make_unique<llvm::IRBuilder<>>(*TheContext);
+    CodeGen::initialize("PCL Program");
 
-    // Initialize LLVM IR to x86 Assembly Compiler
-    llvm::InitializeAllTargetInfos();
-    llvm::InitializeAllTargets();
-    llvm::InitializeAllTargetMCs();
-    llvm::InitializeAllAsmParsers();
-    llvm::InitializeAllAsmPrinters();
+    llvm::FunctionType *main_type = llvm::FunctionType::get(CodeGen::i32, {}, false);
+    llvm::Function *main = llvm::Function::Create(
+        main_type, llvm::Function::ExternalLinkage, "main", CodeGen::TheModule.get());
+
+    llvm::BasicBlock *BB = llvm::BasicBlock::Create(*CodeGen::TheContext, "entry", main);
+    CodeGen::Builder->SetInsertPoint(BB);
+
+    codegen(); 
     
-    auto TargetTriple = llvm::sys::getDefaultTargetTriple();
-    TheModule->setTargetTriple(TargetTriple);
+    CodeGen::Builder->CreateRet(CodeGen::c32(0));
 
-    std::string Error;
-    auto Target = llvm::TargetRegistry::lookupTarget(TargetTriple, Error);
-    if (!Target) {
-        llvm::errs() << Error;
-        return;
-    }
-    auto CPU = "generic";
-    auto Features = "";
-    llvm::TargetOptions opt;
-    auto RM = std::optional<llvm::Reloc::Model>();
-    auto TheTargetMachine = Target->createTargetMachine(TargetTriple, CPU, Features, opt, RM);
-    
-
-    TheModule->setDataLayout(TheTargetMachine->createDataLayout());
-
-    // Initialize Compilation to LLVM IR
-    TheModule->setSourceFileName(co.filename);
-    
-    // Initialize types
-    i8  = llvm::IntegerType::get(*TheContext, 8);
-    i32 = llvm::IntegerType::get(*TheContext, 32);
-
-    llvm::FunctionType *writeString_type =
-        llvm::FunctionType::get(llvm::Type::getVoidTy(*TheContext),
-                                {llvm::PointerType::get(i8, 0)}, false);
-    TheWriteString =
-        llvm::Function::Create(writeString_type, llvm::Function::ExternalLinkage,
-                       "writeString", TheModule.get());
-
-    llvm::FunctionType *main_type = llvm::FunctionType::get(i32, {}, false);
-    llvm::Function *main =
-        llvm::Function::Create(main_type, llvm::Function::ExternalLinkage,
-                       "main", TheModule.get());
-
-    llvm::BasicBlock *BB = llvm::BasicBlock::Create(*TheContext, "entry", main);
-    Builder->SetInsertPoint(BB);
-
-    codegen();
-    Builder->CreateRet(c32(0));
-
-    bool bad = verifyModule(*TheModule, &llvm::errs());
-    if (bad) {
-      std::cerr << "The IR is bad!" << std::endl;
-      TheModule->print(llvm::errs(), nullptr);
-      std::exit(1);
+    if (llvm::verifyModule(*CodeGen::TheModule, &llvm::errs())) {
+        std::cerr << "Error: The generated LLVM IR is invalid!" << std::endl;
+        CodeGen::TheModule->print(llvm::errs(), nullptr);
+        std::exit(1);
     }
 
-    // Output of Compilation
-    std::filesystem::path p = co.filename;
-    std::string fname = co.filename;
-    
-    if (co.imm_code_stdout)
-        TheModule->print(llvm::outs(), nullptr);
-    else {
-        
-        p.replace_extension(".imm");
-        std::string imm_filename = p.string();
+    if (co.optimize) CodeGen::optimize();
 
-        std::error_code EC;
-        llvm::raw_fd_ostream dest(imm_filename, EC, llvm::sys::fs::OF_None);
-
-        if (EC) {
-            llvm::errs() << "Could not open file: " << EC.message() << "\n";
-            std::exit(1);
-        }
-
-        TheModule->print(dest, nullptr);
-    }
-    {
-        std::unique_ptr<llvm::raw_fd_ostream> file_stream;
-        llvm::raw_pwrite_stream *dest_stream;    
-        llvm::legacy::PassManager CodeGenPass;
-    
-        if (co.final_code_stdout) dest_stream = &llvm::outs();
-        else {
-            p.replace_extension(".asm");
-            std::string f_filename = p.string();
-
-            std::error_code EC;
-            file_stream = std::make_unique<llvm::raw_fd_ostream>(f_filename, EC, llvm::sys::fs::OF_None);
-
-            if (EC) {
-                llvm::errs() << "Could not open file: " << EC.message() << "\n";
-                std::exit(1);
-            }
-            dest_stream = file_stream.get();
-        }
-        if (TheTargetMachine->addPassesToEmitFile(CodeGenPass, *dest_stream, nullptr, llvm::CodeGenFileType::AssemblyFile)) {
-            llvm::errs() << "Can't emit a file of this type\n";
-            return;
-        }
-        CodeGenPass.run(*TheModule);
-    }
-
-    if (!co.final_code_stdout && !co.imm_code_stdout) {
-        p.replace_extension(".asm");
-        std::string f_filename = p.string();
-        std::string exec_name = (co.ex_name.empty()) ?
-            (p.parent_path() / "a.out").string() :
-            co.ex_name;
-        std::string cmd = "gcc -x assembler "+f_filename+" -x none build/libpcl.a -o "+exec_name;
-      
-        if (std::system(cmd.c_str())) {
-            std::cerr << "Error: Linking failed!" << std::endl;
-            std::exit(1);
-        }
-    }
+    CodeGen::generateOutput(co);
 } 

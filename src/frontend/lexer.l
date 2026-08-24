@@ -8,6 +8,7 @@
 %option yylineno
 %option nodefault
 %option nounput
+%option noinput
 %option warn
 %option header-file="./build/lexer.hpp"
 %option outfile="./build/lexer.cpp"
@@ -18,7 +19,7 @@
 #include <cerrno>
 #include <cstdlib>
 
-#include "error.hpp"
+#include "ast/error.hpp"
 
 static yy::location loc;
 

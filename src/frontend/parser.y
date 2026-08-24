@@ -10,11 +10,14 @@
     #include <memory>
     #include <vector>
     #include <utility>
+
+    // yynerrs_ unused but it is ok
+    #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 }
 
 %code requires {
-    #include "ast.hpp"
-    #include "error.hpp"
+    #include "ast/ast.hpp"
+    #include "ast/error.hpp"
 }
 
 %code {

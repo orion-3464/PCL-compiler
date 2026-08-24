@@ -1,4 +1,4 @@
-#include "error.hpp"
+#include "ast/error.hpp"
 
 int ErrorHandler::error_count = 0;
 

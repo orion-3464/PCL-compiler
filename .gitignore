@@ -11,4 +11,9 @@ pclc
 \#*\#
 .\#*
 
+*.s
+*.imm
+*.asm
+a.out
+
 compile_commands.json

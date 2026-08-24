@@ -1,4 +1,4 @@
-#include "symbol.hpp"
+#include "ast/symbol.hpp"
 #include <memory>
 
 SymbolTable::SymbolTable() {

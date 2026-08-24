@@ -4,8 +4,8 @@
 #include <unistd.h>
 
 #include "parser.hpp" 
-#include "ast.hpp"
-#include "symbol.hpp"
+#include "ast/ast.hpp"
+#include "ast/symbol.hpp"
 
 extern FILE *yyin;
 extern void yyrestart(FILE *inp);

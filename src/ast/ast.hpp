@@ -8,16 +8,7 @@
 #include <optional>
 #include <map>
 
-#include <llvm/IR/IRBuilder.h>
-#include <llvm/IR/LLVMContext.h>
-#include <llvm/IR/Module.h>
-#include <llvm/IR/Type.h>
-#include <llvm/IR/Verifier.h>
-#include <llvm/IR/BasicBlock.h>
-#include <llvm/IR/DerivedTypes.h>
-#include <llvm/IR/Constants.h>
-#include <llvm/ADT/STLExtras.h>
-#include <llvm/ADT/APFloat.h>
+#include <llvm/IR/Value.h>
 
 #include "location.hpp"
 
@@ -45,23 +36,6 @@ public:
     virtual void sem_analyze() {}
     virtual Value* codegen() const { return nullptr; }
     virtual void printNode(std::ostream &out) const = 0;
-
-protected:
-    // LLVM utilities
-    static std::unique_ptr<llvm::LLVMContext> TheContext;
-    static std::unique_ptr<llvm::Module> TheModule;
-    static std::unique_ptr<llvm::IRBuilder<>> Builder;
-    static std::map<std::string, Value *> NamedValues;
-
-    // LLVM types
-    static llvm::Type *i8;
-    static llvm::Type *i32;
-
-    // PCL Library Function Signatures
-    static llvm::Function *TheWriteString;
-
-    // Utilities
-    static llvm::ConstantInt* c32(int n);
     
 private:
     Loc loc; 
@@ -393,6 +367,7 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override;
 private:
     bool val;
 };
@@ -403,6 +378,7 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override;
 private:
     double val;
 };
@@ -413,6 +389,7 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override;
 private:
     char val;
 };
@@ -423,6 +400,7 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override;
 };
 
 class Ref : public Rvalue {
@@ -431,6 +409,7 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override;
 private:
     std::unique_ptr<Expr> left_value;
 };
@@ -460,6 +439,7 @@ public:
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
     std::optional<int> getConstValue() const override;
+    Value* codegen() const override;
 private:
     UnOp op;
     std::unique_ptr<Expr> expr;
@@ -476,6 +456,7 @@ public:
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
     std::optional<int> getConstValue() const override;
+    Value* codegen() const override;
 private:
     std::unique_ptr<Expr> left;
     BinOp op;

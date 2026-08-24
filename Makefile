@@ -3,12 +3,12 @@
 BUILD := build
 
 LLVM_CXXFLAGS := $(shell llvm-config-19 --cxxflags)
-LLVM_LDLFLAGS := $(shell llvm-config-19 --ldflags --system-libs --libs all)
+LLVM_LDLFLAGS := $(shell llvm-config-19 --ldflags --system-libs --libs core)
 
-CXX := g++
-CXXFLAGS := -g -Wall -Wextra -Wpedantic -Wno-unused-parameter -O3 -I./src -I./$(BUILD) -I./src/ast $(LLVM_CXXFLAGS)
+CXX := clang++
+CXXFLAGS := -g -Wall -Wextra -Wpedantic -Wno-unused-parameter -O3 -I./src -I./$(BUILD) $(LLVM_CXXFLAGS)
 
-CC := gcc
+CC := clang
 CFLAGS := -g -Wall -Wextra -Wpedantic -std=c23 -O2 -I./src/libpcl -fno-builtin-trunc -fno-builtin-round
 
 ifndef V
@@ -19,9 +19,9 @@ endif
 
 default: pclc $(BUILD)/libpcl.a
 
-pclc: $(BUILD)/lexer.o $(BUILD)/parser.o $(BUILD)/ast.o $(BUILD)/error.o $(BUILD)/symbol.o $(BUILD)/main.o
+pclc: $(BUILD)/lexer.o $(BUILD)/parser.o $(BUILD)/ast.o $(BUILD)/error.o $(BUILD)/symbol.o $(BUILD)/codegen.o $(BUILD)/main.o
 	@echo "[LINK] Building compiler executable: $@"
-	$(Q)$(CXX) $(CXXFLAGS) -o $@ $^ $(LLVM_LDLFLAGS) 
+	$(Q)$(CXX) $(CXXFLAGS) -rdynamic -o $@ $^ $(LLVM_LDLFLAGS) 
 
 $(BUILD)/libpcl.a: $(BUILD)/libpcl.o | $(BUILD)
 	@echo "[AR] Archiving standard library: $@"
@@ -34,6 +34,10 @@ $(BUILD)/libpcl.o: src/libpcl/libpcl.c src/libpcl/libpcl.h | $(BUILD)
 $(BUILD)/main.o: src/main.cpp $(BUILD)/parser.hpp | $(BUILD)
 	@echo "[CXX] Compiling: $<"
 	$(Q)$(CXX) $(CXXFLAGS) -c $< -o $@ 
+
+$(BUILD)/codegen.o: src/backend/codegen.cpp src/backend/codegen.hpp | $(BUILD)
+	@echo "[CXX] Compiling: $<"
+	$(Q)$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/symbol.o: src/ast/symbol.cpp src/ast/symbol.hpp $(BUILD)/location.hpp | $(BUILD)
 	@echo "[CXX] Compiling: $<"

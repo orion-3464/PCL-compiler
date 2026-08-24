@@ -6,8 +6,8 @@
 #include <variant>
 #include <string>
 
-#include "ast.hpp"
-#include "error.hpp"
+#include "ast/ast.hpp"
+#include "ast/error.hpp"
 
 struct Variable {
     const Type* type;
