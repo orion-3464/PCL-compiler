@@ -1,0 +1,13 @@
+program shadowing2;
+
+var x : integer;
+
+procedure p ();
+    var x : real;
+begin
+    x := 1.5
+end;
+
+begin
+    x := 1
+end.

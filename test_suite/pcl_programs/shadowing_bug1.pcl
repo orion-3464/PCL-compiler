@@ -1,0 +1,11 @@
+program shadowing1;
+    procedure foo(x: integer);
+	var x: real;
+    begin
+	x := 3.14
+    end;
+
+begin
+    
+end
+.

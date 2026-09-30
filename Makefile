@@ -9,7 +9,7 @@ CXX := clang++
 CXXFLAGS := -g -Wall -Wextra -Wpedantic -Wno-unused-parameter -O3 -I./src -I./$(BUILD) $(LLVM_CXXFLAGS)
 
 CC := clang
-CFLAGS := -g -Wall -Wextra -Wpedantic -std=c23 -O2 -I./src/libpcl -fno-builtin-trunc -fno-builtin-round
+CFLAGS := -g -Wall -Wextra -Wpedantic -std=c23 -O2 -I./src/libpcl -fno-builtin-trunc -fno-builtin-round -fno-builtin-abs
 
 ifndef V
 	Q := @

@@ -3,7 +3,7 @@
 // IO
 
 void writeInteger(integer n) {
-    printf("%d", n);
+    printf("%" PRId64, n);
 }
 
 void writeBoolean(boolean b) {
@@ -16,7 +16,14 @@ void writeChar(char c) {
 }
 
 void writeReal(real r) {
-    printf("%f", r);
+    char text[64];
+
+    snprintf(text, sizeof(text), "%.6g", r);
+    fputs(text, stdout);
+
+    if (strspn(text, "+-0123456789") == strlen(text)) {
+        fputs(".0", stdout);
+    }
 }
 
 void writeString(char *s) {
@@ -25,7 +32,14 @@ void writeString(char *s) {
 
 integer readInteger() {
     integer n;
-    scanf("%d", &n);
+    scanf("%" SCNd64, &n);
+    
+    // To make test cases work
+    int c = getchar();
+    if (c != '\n' && c != EOF) {
+        ungetc(c, stdin);
+    }
+
     return n;
 }
 

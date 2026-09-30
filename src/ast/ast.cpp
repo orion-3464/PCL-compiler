@@ -1,12 +1,14 @@
 #include "ast/ast.hpp"
 #include "ast/error.hpp"
 #include "ast/symbol.hpp"
+#include <llvm/IR/Intrinsics.h>
 
 #include "backend/codegen.hpp" 
 
 #include <iostream>
 #include <sstream>
 #include <filesystem>
+#include <cstdlib>
 
 extern SymbolTable symtab;
 static std::vector<const Type*> routine_returns_stack;
@@ -110,6 +112,44 @@ void Assignment::printNode(std::ostream& out) const {
     out << "Assign( " << *lval << ", " << *e << " )";
 }
 
+Value* Assignment::codegen() const {
+    const Lvalue* target =
+        dynamic_cast<const Lvalue*>(lval.get());
+
+    if (!target) return nullptr;
+
+    Value* value = e->codegen();
+    Value* address = target->generateStackAddress();
+
+    if (!value || !address) return nullptr;
+
+    llvm::Type* expectedType =
+        target->getExprType()->getLLVMType();
+
+    if (value->getType()->isIntegerTy(64) &&
+        expectedType->isDoubleTy()) {
+        value = CodeGen::Builder->CreateSIToFP(
+            value, expectedType, "assignment.int_to_real");
+    }
+
+    if (value->getType() != expectedType) {
+    std::cerr << "[PCL assignment] " << getLoc()
+              << ": " << *lval << " := " << *e << "\n";
+
+    llvm::errs() << "Expected: ";
+    expectedType->print(llvm::errs());
+
+    llvm::errs() << "\nReceived: ";
+    value->getType()->print(llvm::errs());
+    llvm::errs() << "\n";
+
+    std::exit(1);
+}
+
+    CodeGen::Builder->CreateStore(value, address);
+    return nullptr;
+}
+
 /* ==================== Conditional ==================== */
 
 void Conditional::sem_analyze() {
@@ -129,6 +169,54 @@ void Conditional::printNode(std::ostream& out) const {
     out << " )";
 }
 
+Value* Conditional::codegen() const {
+    Value* condition = cond->codegen();
+    if (!condition) return nullptr;
+
+    if (condition->getType()->isIntegerTy(8)) {
+        condition = CodeGen::Builder->CreateICmpNE(
+            condition,
+            llvm::ConstantInt::get(CodeGen::i8, 0),
+            "if.condition");
+    }
+
+    llvm::Function* function =
+        CodeGen::Builder->GetInsertBlock()->getParent();
+
+    llvm::BasicBlock* thenBlock = llvm::BasicBlock::Create(
+        *CodeGen::TheContext, "if.then", function);
+
+    llvm::BasicBlock* elseBlock = else_stmt
+        ? llvm::BasicBlock::Create(
+            *CodeGen::TheContext, "if.else", function)
+        : nullptr;
+
+    llvm::BasicBlock* endBlock = llvm::BasicBlock::Create(
+        *CodeGen::TheContext, "if.end", function);
+
+    CodeGen::Builder->CreateCondBr(
+        condition,
+        thenBlock,
+        elseBlock ? elseBlock : endBlock);
+
+    CodeGen::Builder->SetInsertPoint(thenBlock);
+    then_stmt->codegen();
+
+    if (!CodeGen::Builder->GetInsertBlock()->getTerminator())
+        CodeGen::Builder->CreateBr(endBlock);
+
+    if (elseBlock) {
+        CodeGen::Builder->SetInsertPoint(elseBlock);
+        else_stmt->codegen();
+
+        if (!CodeGen::Builder->GetInsertBlock()->getTerminator())
+            CodeGen::Builder->CreateBr(endBlock);
+    }
+
+    CodeGen::Builder->SetInsertPoint(endBlock);
+    return nullptr;
+}
+
 /* ==================== While ==================== */
 
 void While::sem_analyze() {
@@ -144,30 +232,98 @@ void While::printNode(std::ostream& out) const {
     out << "While( cond: " << *cond << " do " << *loop << " )"; 
 }
 
+Value* While::codegen() const {
+    llvm::Function* function =
+        CodeGen::Builder->GetInsertBlock()->getParent();
+
+    llvm::BasicBlock* conditionBlock = llvm::BasicBlock::Create(
+        *CodeGen::TheContext, "while.condition", function);
+
+    llvm::BasicBlock* loopBlock = llvm::BasicBlock::Create(
+        *CodeGen::TheContext, "while.body", function);
+
+    llvm::BasicBlock* endBlock = llvm::BasicBlock::Create(
+        *CodeGen::TheContext, "while.end", function);
+
+    CodeGen::Builder->CreateBr(conditionBlock);
+    CodeGen::Builder->SetInsertPoint(conditionBlock);
+
+    Value* condition = cond->codegen();
+    if (!condition) return nullptr;
+
+    if (condition->getType()->isIntegerTy(8)) {
+        condition = CodeGen::Builder->CreateICmpNE(
+            condition,
+            llvm::ConstantInt::get(CodeGen::i8, 0),
+            "while.test");
+    }
+
+    CodeGen::Builder->CreateCondBr(
+        condition, loopBlock, endBlock);
+
+    CodeGen::Builder->SetInsertPoint(loopBlock);
+    loop->codegen();
+
+    if (!CodeGen::Builder->GetInsertBlock()->getTerminator())
+        CodeGen::Builder->CreateBr(conditionBlock);
+
+    CodeGen::Builder->SetInsertPoint(endBlock);
+    return nullptr;
+}
+
 /* ==================== Labeling ==================== */
 
 void Labeling::sem_analyze() {
     SymTabEntry* label_entry = symtab.lookup(label);
     if(!label_entry) {
         ErrorHandler::error(getLoc(), "Label not declared");
-        return;
     }
-    Label* label_info = std::get_if<Label>(&label_entry->sym_info);
-    if(!label_info) {
-        ErrorHandler::error(getLoc(), "Symbol declared but not as label");
-        return;
+    else if (Label* label_info = std::get_if<Label>(&label_entry->sym_info)) {
+        if (label_entry->depth != symtab.getCurrentDepth()) {
+             ErrorHandler::error(getLoc(), "Label '" + label +
+                "' belongs to a different structural unit");
+        }
+        else if (label_info->is_defined) {
+             ErrorHandler::error(getLoc(), "Label '" + label + "' is already defined");
+        }
+        else {
+            label_info->is_defined = true;
+        }
     }
-    if (label_info->is_defined) {
-        ErrorHandler::error(getLoc(), "Label '" + label + "' is already defined");
-        return;
+    else {
+        ErrorHandler::error(getLoc(), "Symbol '" + label + "' was not declared as a label");
     }
-
-    label_info->is_defined=true;
+    
     code->sem_analyze();
 }
 
 void Labeling::printNode(std::ostream& out) const {
     out << "Labeling( label: " << label << " do " << *code << " )"; 
+}
+
+Value* Labeling::codegen() const {
+    llvm::BasicBlock* destination =
+        CodeGen::backendST.lookupLabel(label);
+
+    llvm::Function* function = CodeGen::Builder->GetInsertBlock()->getParent();
+
+    if (!destination || destination->getParent() != function) {
+        std::cerr << "Code generation: invalid label '"
+                  << label << "'\n";
+        std::exit(1);
+    }
+
+    if (llvm::Instruction* placeholder = destination->getTerminator()) {
+        placeholder->eraseFromParent();
+    }
+
+    if (!CodeGen::Builder->GetInsertBlock()->getTerminator())
+        CodeGen::Builder->CreateBr(destination);
+
+    CodeGen::Builder->SetInsertPoint(destination);
+    code->codegen();
+
+    return nullptr;
 }
 
 /* ==================== Goto ==================== */
@@ -186,16 +342,71 @@ void Goto::sem_analyze() {
     if (label_entry->depth != symtab.getCurrentDepth()) {
         ErrorHandler::error(getLoc(), "Illegal cross-scope jump: label '" + label + "' is not declared in the current scope");
     }
+    label_info->is_used = true;
 }
 
 void Goto::printNode(std::ostream& out) const {
     out << "Goto( label: " << label <<  " )"; 
 }
 
+Value* Goto::codegen() const {
+    llvm::BasicBlock* destination =
+        CodeGen::backendST.lookupLabel(label);
+
+    llvm::Function* function =
+        CodeGen::Builder->GetInsertBlock()->getParent();
+
+    if (!destination || destination->getParent() != function) {
+        std::cerr << "Code generation: invalid goto target '"
+                  << label << "'\n";
+        std::exit(1);
+    }
+
+    CodeGen::Builder->CreateBr(destination);
+
+    llvm::BasicBlock* afterGoto = llvm::BasicBlock::Create(
+        *CodeGen::TheContext, "after.goto", function);
+
+    CodeGen::Builder->SetInsertPoint(afterGoto);
+    return nullptr;
+}
+
 /* ==================== Return ==================== */
 
 void Return::printNode(std::ostream& out) const {
     out << "Return()"; 
+}
+
+Value* Return::codegen() const {
+    llvm::Function* function =
+        CodeGen::Builder->GetInsertBlock()->getParent();
+
+    llvm::Type* returnType = function->getReturnType();
+
+    if (returnType->isVoidTy()) {
+        CodeGen::Builder->CreateRetVoid();
+    } else if (function->getName() == "main") {
+        CodeGen::Builder->CreateRet(CodeGen::c64(0));
+    } else {
+        Value* resultAddress =
+            CodeGen::backendST.lookupValue("%result");
+
+        if (!resultAddress) {
+            std::cerr << "Code generation: missing function result\n";
+            std::exit(1);
+        }
+
+        Value* result = CodeGen::Builder->CreateLoad(
+            returnType, resultAddress, "return.value");
+
+        CodeGen::Builder->CreateRet(result);
+    }
+
+    llvm::BasicBlock* afterReturn = llvm::BasicBlock::Create(
+        *CodeGen::TheContext, "after.return", function);
+
+    CodeGen::Builder->SetInsertPoint(afterReturn);
+    return nullptr;
 }
 
 /* ==================== New ==================== */
@@ -223,6 +434,8 @@ void New::sem_analyze() {
     } else {
         size->sem_analyze();
         const Type* size_type = size->getExprType();
+        if (!size_type) return;
+
         if (size_type->getType() != PCLtype::Integer)
             ErrorHandler::error(lvl->getLoc(), "New: Allocation size must be of type integer");
         if (tar_type->getType() != PCLtype::Array || tar_type->isComplete())
@@ -241,6 +454,81 @@ void New::printNode(std::ostream& out) const {
     out << "New( ";
     if(size) out << "number: " << *size << " of ";
     out << *lvl << " )";
+}
+
+Value* New::codegen() const {
+    const Lvalue* destination =
+        dynamic_cast<const Lvalue*>(lvl.get());
+
+    const PointerType* pointerType =
+        dynamic_cast<const PointerType*>(lvl->getExprType());
+
+    if (!destination || !pointerType) return nullptr;
+
+    Value* address = destination->generateStackAddress();
+    if (!address) return nullptr;
+
+    const Type* targetType = pointerType->getTargetType();
+
+    llvm::Type* sizeType =
+        llvm::Type::getInt64Ty(*CodeGen::TheContext);
+
+    Value* bytes = nullptr;
+
+    if (!size) {
+        // Allocate one complete object, including a whole fixed array.
+        bytes = llvm::ConstantInt::get(
+            sizeType, targetType->getSize());
+    } else {
+        const ArrayType* arrayType =
+            dynamic_cast<const ArrayType*>(targetType);
+
+        if (!arrayType) return nullptr;
+
+        Value* count = size->codegen();
+        if (!count) return nullptr;
+
+        count = CodeGen::Builder->CreateSExt(
+            count, sizeType, "new.count");
+
+        // The specification requires a positive allocation count.
+        llvm::Function* function =
+            CodeGen::Builder->GetInsertBlock()->getParent();
+
+        llvm::BasicBlock* allocateBlock = llvm::BasicBlock::Create(
+            *CodeGen::TheContext, "new.allocate", function);
+
+        llvm::BasicBlock* invalidBlock = llvm::BasicBlock::Create(
+            *CodeGen::TheContext, "new.invalid", function);
+
+        Value* positive = CodeGen::Builder->CreateICmpSGT(
+            count, llvm::ConstantInt::get(sizeType, 0));
+
+        CodeGen::Builder->CreateCondBr(
+            positive, allocateBlock, invalidBlock);
+
+        CodeGen::Builder->SetInsertPoint(invalidBlock);
+
+        llvm::Function* trap = llvm::Intrinsic::getDeclaration(
+            CodeGen::TheModule.get(), llvm::Intrinsic::trap);
+
+        CodeGen::Builder->CreateCall(trap);
+        CodeGen::Builder->CreateUnreachable();
+
+        CodeGen::Builder->SetInsertPoint(allocateBlock);
+
+        Value* elementBytes = llvm::ConstantInt::get(
+            sizeType, arrayType->getElementType()->getSize());
+
+        bytes = CodeGen::Builder->CreateMul(
+            count, elementBytes, "new.bytes");
+    }
+
+    Value* allocated = CodeGen::Builder->CreateCall(
+        CodeGen::TheMalloc, {bytes}, "new.pointer");
+
+    CodeGen::Builder->CreateStore(allocated, address);
+    return nullptr;
 }
 
 /* ==================== Dispose ==================== */
@@ -274,9 +562,32 @@ void Dispose::printNode(std::ostream& out) const {
     out << "Dispose( " << *lvl << " )";
 }
 
+Value* Dispose::codegen() const {
+    const Lvalue* destination =
+        dynamic_cast<const Lvalue*>(lvl.get());
+
+    if (!destination) return nullptr;
+
+    Value* address = destination->generateStackAddress();
+    if (!address) return nullptr;
+
+    Value* pointer = CodeGen::Builder->CreateLoad(
+        CodeGen::ptr, address, "dispose.pointer");
+
+    CodeGen::Builder->CreateCall(
+        CodeGen::TheFree, {pointer});
+
+    CodeGen::Builder->CreateStore(
+        llvm::ConstantPointerNull::get(CodeGen::ptr),
+        address);
+
+    return nullptr;
+}
+
 /* ==================== Id ==================== */
 
 void Id::sem_analyze() {
+    is_ref = false;
     SymTabEntry* id_entry = symtab.lookup(name);
     if (!id_entry) {
         ErrorHandler::error(getLoc(), "Name " + name + " not declared");
@@ -289,10 +600,31 @@ void Id::sem_analyze() {
     } 
     else if (par_info) {
         type = par_info->type->cloneType();
+        is_ref = par_info->is_reference;
     } else {
         ErrorHandler::error(getLoc(), "Identifier '" + name + "' is not a variable or parameter");
     }
 }
+
+Value* Id::generateStackAddress() const {
+    Value* address = CodeGen::backendST.lookupValue(name);
+    if (!address) return nullptr;
+
+    if (is_ref) {
+        return CodeGen::Builder->CreateLoad(
+            CodeGen::ptr, address, name + "_ref_addr");
+    }
+
+    return address;
+}
+
+Value* Id::codegen() const {
+    Value* a = this->generateStackAddress();
+    llvm::Type* type = nullptr;
+    if (a) type = this->getExprType()->getLLVMType();
+    return CodeGen::Builder->CreateLoad(type, a, name);
+}
+
 
 void Id::printNode(std::ostream& out) const {
     out << "Id( " << name << " )";
@@ -313,6 +645,17 @@ void Result::sem_analyze() {
     type = current_ret_type->cloneType();
 }
 
+Value* Result::generateStackAddress() const {
+    return CodeGen::backendST.lookupValue("%result");
+}
+
+Value* Result::codegen() const {
+    Value* a = this->generateStackAddress();
+    llvm::Type* type = nullptr;
+    if (a) type = this->getExprType()->getLLVMType();
+    return CodeGen::Builder->CreateLoad(type, a, "loadresult");
+}
+
 void Result::printNode(std::ostream& out) const  {
     out << "Result()";
 }
@@ -330,8 +673,23 @@ void Str::printNode(std::ostream& out) const {
     out << "String( " << value << " )";
 }
 
+Value* Str::generateStackAddress() const {
+    llvm::GlobalVariable* storage = CodeGen::Builder->CreateGlobalString(value,
+                                                                         "string.literal");
+    storage->setConstant(false);
+    storage->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::None);
+
+    return storage;
+}
+
 Value* Str::codegen() const {
-    return CodeGen::Builder->CreateGlobalStringPtr(value);
+    Value* address = generateStackAddress();
+    if (!address) return nullptr;
+
+    return CodeGen::Builder->CreateLoad(
+        getExprType()->getLLVMType(),
+        address,
+        "string_value");
 }
 
 /* ==================== Access ==================== */
@@ -340,13 +698,16 @@ void Access::sem_analyze() {
     array_base->sem_analyze();
     index->sem_analyze();
 
+    const Type* base_type = array_base->getExprType();
+    const Type* index_type = index->getExprType();
+    if (!base_type || !index_type) return;
+    
     const ArrayType* array_base_ptr = dynamic_cast<const ArrayType*>(array_base->getExprType());
     if (!array_base_ptr) {
         ErrorHandler::error(array_base->getLoc(), "Array access: The symbol indexed must be of array type");
         return;
     }
     
-    const Type* index_type = index->getExprType();
     if (index_type->getType() != PCLtype::Integer) {
         ErrorHandler::error(index->getLoc(), "Array access: Index must be of type integer");
         return;
@@ -368,6 +729,49 @@ void Access::sem_analyze() {
         }
     }
     type = array_base_ptr->getElementType()->cloneType();
+}
+
+Value* Access::generateStackAddress() const {
+    const Lvalue* base =
+        dynamic_cast<const Lvalue*>(array_base.get());
+
+    const ArrayType* arrayType =
+        dynamic_cast<const ArrayType*>(array_base->getExprType());
+
+    if (!base || !arrayType) return nullptr;
+
+    Value* address = base->generateStackAddress();
+    if (!address) return nullptr;
+
+    Value* idx = index->codegen();
+    if (!idx) return nullptr;
+
+    if (!arrayType->isComplete()) {
+        llvm::Type* elementType =
+            arrayType->getElementType()->getLLVMType();
+
+        return CodeGen::Builder->CreateGEP(
+            elementType, address, idx, "accessgepref");
+    }
+
+    Value* zero = llvm::ConstantInt::get(CodeGen::i64, 0);
+    Value* indices[] = {zero, idx};
+
+    return CodeGen::Builder->CreateGEP(
+        arrayType->getLLVMType(),
+        address,
+        indices,
+        "accessgepfull");
+}
+
+Value* Access::codegen() const {
+    Value* ptr = this->generateStackAddress();
+    if (!ptr) return nullptr;
+
+    const ArrayType* arrayBaseType = dynamic_cast<const ArrayType*>(array_base->getExprType());
+    llvm::Type* elementLLVMType = arrayBaseType->getElementType()->getLLVMType();
+    
+    return CodeGen::Builder->CreateLoad(elementLLVMType, ptr, "accesstmp");
 }
 
 void Access::printNode(std::ostream& out) const {
@@ -394,6 +798,18 @@ void Deref::sem_analyze() {
     type = ptr_type->getTargetType()->cloneType();
 }
 
+Value* Deref::generateStackAddress() const {
+    return pointer->codegen();
+}
+
+Value* Deref::codegen() const {
+    Value* addr = this->generateStackAddress();
+    if (!addr) return nullptr;
+
+    llvm::Type* targetLLVMType = this->getExprType()->getLLVMType();
+    return CodeGen::Builder->CreateLoad(targetLLVMType, addr, "dereftmp");    
+}
+
 void Deref::printNode(std::ostream& out) const {
     out << "Deref( " << *pointer << " )";
 }
@@ -413,7 +829,7 @@ std::optional<int> Const::getConstValue() const {
 }
 
 Value* Const::codegen() const {
-    return CodeGen::c32(num);
+    return CodeGen::c64(num);
 }
 
 /* ==================== Bool ==================== */
@@ -427,7 +843,13 @@ void Bool::printNode(std::ostream& out) const {
 }
 
 Value* Bool::codegen() const {
-    return llvm::ConstantInt::getBool(*CodeGen::TheContext, val);
+    return llvm::ConstantInt::get(CodeGen::i8, val ? 1 : 0);
+}
+
+// 0-1 and Bool equivalence
+static Value* pclBoolean(Value* condition) {
+    return CodeGen::Builder->CreateZExt(
+        condition, CodeGen::i8, "bool_value");
 }
 
 /* ==================== Real ==================== */
@@ -495,7 +917,10 @@ void Ref::printNode(std::ostream& out) const {
 }
 
 Value* Ref::codegen() const {
-    return left_value->codegen();
+    const Lvalue* lval = dynamic_cast<const Lvalue*>(left_value.get());
+    if (!lval) return nullptr;
+
+    return lval->generateStackAddress();
 }
 
 /* ==================== Unop ==================== */
@@ -544,29 +969,30 @@ std::optional<int> Unop::getConstValue() const {
 }
 
 Value* Unop::codegen() const {
-    Value* E = expr->codegen();
+    Value* operand = expr->codegen();
+    if (!operand) return nullptr;
 
-    if (expr->getExprType()->getType()==PCLtype::Real) {
-        switch (op) {
-        case UnOp::Plus:
-            return E;
-        case UnOp::Minus:
-            return CodeGen::Builder->CreateFNeg(E, "fnegtmp");
-        default:
-            return nullptr;
-        }
-    } else {
-        switch (op) {
-        case UnOp::Plus:
-            return E;
-        case UnOp::Minus:
-            return CodeGen::Builder->CreateNeg(E, "negtmp");
-        case UnOp::Not:
-            return CodeGen::Builder->CreateNot(E, "nottmp");
-        default:
-            return nullptr;
-        }
+    if (op == UnOp::Not) {
+        Value* isFalse = CodeGen::Builder->CreateICmpEQ(
+            operand,
+            llvm::ConstantInt::get(operand->getType(), 0),
+            "not.test");
+
+        return CodeGen::Builder->CreateZExt(
+            isFalse, CodeGen::i8, "not.value");
     }
+
+    if (op == UnOp::Plus)
+        return operand;
+
+    if (op == UnOp::Minus) {
+        if (expr->getExprType()->getType() == PCLtype::Real)
+            return CodeGen::Builder->CreateFNeg(operand, "fnegtmp");
+
+        return CodeGen::Builder->CreateNeg(operand, "negtmp");
+    }
+
+    return nullptr;
 }
 
 /* ==================== Binop ==================== */
@@ -601,13 +1027,25 @@ void Binop::sem_analyze() {
         type = std::make_unique<BasicType>(PCLtype::Integer);
     }
     else if (op==BinOp::Eq || op==BinOp::Neq) {
-        bool both_arithmetic = left_type->isArithmetic() && right_type->isArithmetic();
-        bool same_type_not_array = left_type->isSame(right_type) && left_type->getType() != PCLtype::Array;
+        bool both_arithmetic =
+            left_type->isArithmetic() && right_type->isArithmetic();
 
-        if (!both_arithmetic && !same_type_not_array) {
-            ErrorHandler::error(left->getLoc(), "Binary Operation: Equality requires operands of same non-array type or both arithmetic");
+        bool same_type_not_array =
+            left_type->isSame(right_type) &&
+            left_type->getType() != PCLtype::Array;
+
+        bool pointer_and_nil =
+            (left_type->getType() == PCLtype::Pointer &&
+             right_type->getType() == PCLtype::Nil) ||
+            (left_type->getType() == PCLtype::Nil &&
+             right_type->getType() == PCLtype::Pointer);
+
+        if (!both_arithmetic && !same_type_not_array && !pointer_and_nil) {
+            ErrorHandler::error(left->getLoc(),
+                "Binary Operation: Equality requires compatible operands");
             return;
         }
+
         type = std::make_unique<BasicType>(PCLtype::Boolean);
     }
     else if (op==BinOp::Lt || op==BinOp::Gt || op==BinOp::Le || op==BinOp::Ge) {
@@ -658,8 +1096,52 @@ std::optional<int> Binop::getConstValue() const {
 
 Value* Binop::codegen() const {
     Value* L = left->codegen();
+    if (!L) return nullptr;
+
+    if (op == BinOp::And || op == BinOp::Or) {
+        if (L->getType()->isIntegerTy(8)) {
+            L = CodeGen::Builder->CreateICmpNE(L, llvm::ConstantInt::get(L->getType(), 0),
+                                               "logic.left");
+        }
+
+        llvm::BasicBlock* left_block = CodeGen::Builder->GetInsertBlock();
+        llvm::Function* function = left_block->getParent();
+
+        llvm::BasicBlock* right_block =
+            llvm::BasicBlock::Create(*CodeGen::TheContext, "logic.right", function);
+        llvm::BasicBlock* end_block =
+            llvm::BasicBlock::Create(*CodeGen::TheContext, "logic.end", function);
+
+        if (op == BinOp::And)
+            CodeGen::Builder->CreateCondBr(L, right_block, end_block);
+        else
+            CodeGen::Builder->CreateCondBr(L, end_block, right_block);
+
+        CodeGen::Builder->SetInsertPoint(right_block);
+        Value* R = right->codegen();
+        if (!R) return nullptr;
+
+        if (R->getType()->isIntegerTy(8)) {
+            R = CodeGen::Builder->CreateICmpNE(
+                R, llvm::ConstantInt::get(R->getType(), 0), "logic.right.value");
+        }
+
+        llvm::BasicBlock* right_exit = CodeGen::Builder->GetInsertBlock();
+        CodeGen::Builder->CreateBr(end_block);
+
+        CodeGen::Builder->SetInsertPoint(end_block);
+        llvm::PHINode* result = CodeGen::Builder->CreatePHI(
+            llvm::Type::getInt1Ty(*CodeGen::TheContext), 2, "logic.result");
+
+        result->addIncoming(
+            llvm::ConstantInt::getBool(*CodeGen::TheContext, op == BinOp::Or),
+            left_block);
+        result->addIncoming(R, right_exit);
+        return pclBoolean(result);
+    }
+
     Value* R = right->codegen();
-    if (!L || !R) return nullptr;
+    if (!R) return nullptr;
 
     bool isLeftReal = (left->getExprType()->getType()==PCLtype::Real);
     bool isRightReal = (right->getExprType()->getType()==PCLtype::Real);
@@ -673,24 +1155,27 @@ Value* Binop::codegen() const {
         switch (op) {
         case BinOp::Add:
             return CodeGen::Builder->CreateFAdd(L, R, "faddtmp");
+
         case BinOp::Sub:
             return CodeGen::Builder->CreateFSub(L, R, "fsubtmp");
+
         case BinOp::Mul:
             return CodeGen::Builder->CreateFMul(L, R, "fmultmp");
+
         case BinOp::Div:
             return CodeGen::Builder->CreateFDiv(L, R, "fdivtmp");
         case BinOp::Eq:
-            return CodeGen::Builder->CreateFCmpOEQ(L, R, "fcmpeqtmp");
+            return pclBoolean(CodeGen::Builder->CreateFCmpOEQ(L, R, "fcmpeqtmp"));
         case BinOp::Neq:
-            return CodeGen::Builder->CreateFCmpONE(L, R, "fcmpneqtmp");
+            return pclBoolean(CodeGen::Builder->CreateFCmpONE(L, R, "fcmpneqtmp"));
         case BinOp::Lt:
-            return CodeGen::Builder->CreateFCmpOLT(L, R, "fcmplttmp");
+            return pclBoolean(CodeGen::Builder->CreateFCmpOLT(L, R, "fcmplttmp"));
         case BinOp::Le:
-            return CodeGen::Builder->CreateFCmpOLE(L, R, "fcmpletmp");
+            return pclBoolean(CodeGen::Builder->CreateFCmpOLE(L, R, "fcmpletmp"));
         case BinOp::Gt:
-            return CodeGen::Builder->CreateFCmpOGT(L, R, "fcmpngttmp");
+            return pclBoolean(CodeGen::Builder->CreateFCmpOGT(L, R, "fcmpngttmp"));
         case BinOp::Ge:
-            return CodeGen::Builder->CreateFCmpOGE(L, R, "fcmpgetmp");
+            return pclBoolean(CodeGen::Builder->CreateFCmpOGE(L, R, "fcmpgetmp"));
         default:
             return nullptr;
         }
@@ -711,17 +1196,17 @@ Value* Binop::codegen() const {
         case BinOp::Or:
             return CodeGen::Builder->CreateOr(L, R, "ortmp");
         case BinOp::Eq:
-            return CodeGen::Builder->CreateICmpEQ(L, R, "icmpeqtmp");
+            return pclBoolean(CodeGen::Builder->CreateICmpEQ(L, R, "icmpeqtmp"));
         case BinOp::Neq:
-            return CodeGen::Builder->CreateICmpNE(L, R, "icmpneqtmp");
+            return pclBoolean(CodeGen::Builder->CreateICmpNE(L, R, "icmpneqtmp"));
         case BinOp::Lt:
-            return CodeGen::Builder->CreateICmpSLT(L, R, "icmplttmp");
+            return pclBoolean(CodeGen::Builder->CreateICmpSLT(L, R, "icmplttmp"));
         case BinOp::Le:
-            return CodeGen::Builder->CreateICmpSLE(L, R, "icmpletmp");
+            return pclBoolean(CodeGen::Builder->CreateICmpSLE(L, R, "icmpletmp"));
         case BinOp::Gt:
-            return CodeGen::Builder->CreateICmpSGT(L, R, "icmpngttmp");
+            return pclBoolean(CodeGen::Builder->CreateICmpSGT(L, R, "icmpngttmp"));
         case BinOp::Ge:
-            return CodeGen::Builder->CreateICmpSGE(L, R, "icmpgetmp");
+            return pclBoolean(CodeGen::Builder->CreateICmpSGE(L, R, "icmpgetmp"));
         default:
             return nullptr;
         }
@@ -731,6 +1216,7 @@ Value* Binop::codegen() const {
 /* ==================== CallProc ==================== */
 
 void CallProc::sem_analyze() {
+    is_ref_args.clear();
     for (const auto& arg : args) arg->sem_analyze();
 
     SymTabEntry* routine_entry = symtab.lookup(name);
@@ -797,6 +1283,11 @@ void CallProc::sem_analyze() {
             ErrorHandler::error(args[i]->getLoc(), errorMsg.str());
         }
     }
+    is_ref_args.reserve(pars.size());
+
+    for (const auto& parameter : pars) {
+        is_ref_args.push_back(parameter.is_reference);
+    }
 }
 
 void CallProc::printNode(std::ostream& out) const {
@@ -811,20 +1302,85 @@ void CallProc::printNode(std::ostream& out) const {
 }
 
 Value* CallProc::codegen() const {
-    llvm::Function *CalleeF = CodeGen::TheModule->getFunction("writeString");
-    llvm::Value* dummyString = CodeGen::Builder->CreateGlobalStringPtr("Hello from PCL CallProc!\n");
+    llvm::Function* callee =
+        CodeGen::backendST.lookupProc(name);
 
-    // 3. Βάζουμε το argument στη λίστα
-    std::vector<llvm::Value*> ArgsV;
-    ArgsV.push_back(dummyString);
+    if (!callee)
+        callee = CodeGen::TheModule->getFunction(name);
 
-    // 4. Δημιουργούμε την κλήση στο LLVM IR
-    return CodeGen::Builder->CreateCall(CalleeF, ArgsV);
+    if (!callee) {
+        std::cerr << "Code generation: routine '"
+                  << name << "' was not found\n";
+        std::exit(1);
+    }
+
+    /*
+    if (is_ref_args.size() != args.size() ||
+        callee->arg_size() != args.size()) {
+        std::cerr << "Code generation: argument count mismatch for '"
+                  << name << "'\n";
+        std::exit(1);
+    }
+    */
+    bool needsStaticLink = CodeGen::backendST.hasStaticLink(callee);
+
+    size_t expectedCount = args.size() + (needsStaticLink ? 1u : 0u);
+
+    if (is_ref_args.size() != args.size() ||
+        callee->arg_size() != expectedCount) {
+
+        std::cerr << "Code generation: argument count mismatch for '"
+                  << name << "'\n";
+        std::exit(1);
+    }
+
+    std::vector<Value*> argumentValues;
+    argumentValues.reserve(expectedCount);
+
+    for (size_t i = 0; i < args.size(); ++i) {
+        llvm::Type* expectedType =
+            callee->getFunctionType()->getParamType(i);
+
+        Value* argument = nullptr;
+
+        if (is_ref_args[i]) {
+            const Lvalue* lvalue =
+                dynamic_cast<const Lvalue*>(args[i].get());
+
+            if (lvalue)
+                argument = lvalue->generateStackAddress();
+        } else {
+            argument = args[i]->codegen();
+
+            if (argument &&
+                argument->getType()->isIntegerTy(64) &&
+                expectedType->isDoubleTy()) {
+                argument = CodeGen::Builder->CreateSIToFP(
+                    argument, expectedType, "call.int_to_real");
+            }
+        }
+
+        if (!argument || argument->getType() != expectedType) {
+            std::cerr << "Code generation: invalid argument "
+                      << (i + 1) << " for routine '"
+                      << name << "'\n";
+            std::exit(1);
+        }
+
+        argumentValues.push_back(argument);
+    }
+
+    if (needsStaticLink) 
+        argumentValues.push_back(CodeGen::backendST.staticLinkFor(callee));
+
+    CodeGen::Builder->CreateCall(callee, argumentValues);
+    return nullptr;
 }
 
 /* ==================== CallFunc ==================== */
 
 void CallFunc::sem_analyze() {
+    is_ref_args.clear();
     for (const auto& arg : args) arg->sem_analyze();
 
     SymTabEntry* routine_entry = symtab.lookup(name);
@@ -891,6 +1447,12 @@ void CallFunc::sem_analyze() {
             ErrorHandler::error(args[i]->getLoc(), errorMsg.str());
         }
     }
+
+    is_ref_args.reserve(pars.size());
+
+    for (const auto& parameter : pars) {
+        is_ref_args.push_back(parameter.is_reference);
+    }
     
     type = routine_name->retType->cloneType();
 }
@@ -906,10 +1468,86 @@ void CallFunc::printNode(std::ostream& out) const {
     out << " )";
 }
 
+Value* CallFunc::codegen() const {
+    llvm::Function* callee =
+        CodeGen::backendST.lookupProc(name);
+
+    if (!callee)
+        callee = CodeGen::TheModule->getFunction(name);
+
+    if (!callee) {
+        std::cerr << "Code generation: routine '"
+                  << name << "' was not found\n";
+        std::exit(1);
+    }
+
+    /*
+    if (is_ref_args.size() != args.size() ||
+        callee->arg_size() != args.size()) {
+        std::cerr << "Code generation: argument count mismatch for '"
+                  << name << "'\n";
+        std::exit(1);
+    }
+    */
+    bool needsStaticLink = CodeGen::backendST.hasStaticLink(callee);
+
+    size_t expectedCount =
+        args.size() + (needsStaticLink ? 1u : 0u);
+
+    if (is_ref_args.size() != args.size() ||
+        callee->arg_size() != expectedCount) {
+
+        std::cerr << "Code generation: argument count mismatch for '"
+                  << name << "'\n";
+        std::exit(1);
+    }
+
+    std::vector<Value*> argumentValues;
+    argumentValues.reserve(expectedCount);
+
+    for (size_t i = 0; i < args.size(); ++i) {
+        llvm::Type* expectedType =
+            callee->getFunctionType()->getParamType(i);
+
+        Value* argument = nullptr;
+
+        if (is_ref_args[i]) {
+            const Lvalue* lvalue =
+                dynamic_cast<const Lvalue*>(args[i].get());
+
+            if (lvalue)
+                argument = lvalue->generateStackAddress();
+        } else {
+            argument = args[i]->codegen();
+
+            if (argument &&
+                argument->getType()->isIntegerTy(64) &&
+                expectedType->isDoubleTy()) {
+                argument = CodeGen::Builder->CreateSIToFP(
+                    argument, expectedType, "call.int_to_real");
+            }
+        }
+
+        if (!argument || argument->getType() != expectedType) {
+            std::cerr << "Code generation: invalid argument "
+                      << (i + 1) << " for routine '"
+                      << name << "'\n";
+            std::exit(1);
+        }
+
+        argumentValues.push_back(argument);
+    }
+
+    if (needsStaticLink) 
+    argumentValues.push_back(CodeGen::backendST.staticLinkFor(callee));
+    
+    return CodeGen::Builder->CreateCall(callee, argumentValues, "call.result");
+}
+
 /* ==================== Basic Type ==================== */
 
 int BasicType::getSize() const {
-    if(type == PCLtype::Integer) return 4;
+    if(type == PCLtype::Integer) return 8;
     else if(type == PCLtype::Real) return 8;
     else if (type == PCLtype::Boolean || type == PCLtype::Char) return 1;
     else return 0;
@@ -925,6 +1563,13 @@ bool BasicType::isComplete() const {
 
 bool BasicType::isArithmetic() const {
     return (type == PCLtype::Integer || type == PCLtype::Real);
+}
+
+bool BasicType::isValid() const {
+    return type == PCLtype::Integer ||
+           type == PCLtype::Real ||
+           type == PCLtype::Boolean ||
+           type == PCLtype::Char;
 }
 
 PCLtype BasicType::inferType() const {
@@ -970,6 +1615,23 @@ void BasicType::printNode(std::ostream& out) const {
     }
 }
 
+llvm::Type* BasicType::getLLVMType() const {
+    switch (type) {
+    case PCLtype::Integer:
+        return CodeGen::i64;
+    case PCLtype::Real:
+        return CodeGen::r64;
+    case PCLtype::Boolean:
+    case PCLtype::Char:
+        return CodeGen::i8;
+    case PCLtype::Nil:
+        return CodeGen::ptr;
+    default:
+        return nullptr;
+    }
+}
+
+
 /* ==================== Array Type ==================== */
 
 const Type* ArrayType::getElementType() const {
@@ -998,6 +1660,12 @@ bool ArrayType::isArithmetic() const {
     return false;
 }
 
+bool ArrayType::isValid() const {
+    return (size == -1 || size > 0) &&
+           element_type->isValid() &&
+           element_type->isComplete();
+}
+
 PCLtype ArrayType::inferType() const {
     return element_type->inferType();
 }
@@ -1016,6 +1684,7 @@ bool ArrayType::isSame(const Type *other) const {
 }
 
 bool ArrayType::isCompatible(const Type* other) const {
+    /*
     if (this->isSame(other)) return true;
 
     const ArrayType* other_array = dynamic_cast<const ArrayType*>(other);
@@ -1024,11 +1693,20 @@ bool ArrayType::isCompatible(const Type* other) const {
                this->getElementType()->isSame(other_array->getElementType());
     
     return false;
+    */
+    return isComplete() && isSame(other);
 }
 
 void ArrayType::printNode(std::ostream& out) const {
     out << "ArrayType( element type: " << *element_type
         << " size: " << size << " )";
+}
+
+llvm::Type* ArrayType::getLLVMType() const {
+    llvm::Type* elementType = element_type->getLLVMType();
+    unsigned length = size > 0 ? static_cast<unsigned>(size) : 0;
+
+    return llvm::ArrayType::get(elementType, length);
 }
 
 /* ==================== Pointer Type ==================== */
@@ -1052,6 +1730,10 @@ bool PointerType::isComplete() const {
 
 bool PointerType::isArithmetic() const {
     return false;
+}
+
+bool PointerType::isValid() const {
+    return target->isValid();
 }
 
 PCLtype PointerType::inferType() const {
@@ -1092,12 +1774,13 @@ void PointerType::printNode(std::ostream& out) const {
     out << "PointerType( element type: " << *target << " )";
 }
 
+llvm::Type* PointerType::getLLVMType() const {
+    return CodeGen::ptr;
+}
 
 /* ==================== Body ==================== */
 
-void Body::sem_analyze() {
-    symtab.enterScope();
-    
+void Body::sem_analyze() {    
     for (const auto& local : locals)
         local->sem_analyze();
     block->sem_analyze();
@@ -1108,7 +1791,7 @@ void Body::sem_analyze() {
                 SymTabEntry* entry = symtab.lookup(id);
                 if (entry) {
                     Label* lbl = std::get_if<Label>(&entry->sym_info);
-                    if (lbl && !lbl->is_defined) {
+                    if (lbl && lbl->is_used && !lbl->is_defined) {
                         ErrorHandler::error(local->getLoc(), "Label '"+id+"' was declared but never defined in the body");
                     }
                 }
@@ -1125,9 +1808,7 @@ void Body::sem_analyze() {
                 }
             }
         }
-    }
-    
-    symtab.exitScope();
+    }    
 }
 
 void Body::printNode(std::ostream& out) const  {
@@ -1138,15 +1819,39 @@ void Body::printNode(std::ostream& out) const  {
     out << "  " << *block << "\n)";
 }
 
+unsigned Body::getLocalSlotCount() const {
+    unsigned count = 0;
+
+    for (const auto& local : locals) {
+        if (const auto* variable =
+                dynamic_cast<const Var*>(local.get())) {
+            count += variable->getSlotCount();
+        }
+    }
+
+    return count;
+}
+
 Value* Body::codegen() const {
-    // TODO:: Locals codegen
-    return block->codegen();
+    CodeGen::backendST.enterScope();
+
+    for (const auto& local : locals)
+        local->codegen();
+
+    block->codegen();
+
+    CodeGen::backendST.exitScope();
+    return nullptr;
 }
 
 /* ==================== Var ==================== */
 
 void Var::sem_analyze() {
     const Type* variables_type = type.get();
+    if (!variables_type->isValid()) {
+        ErrorHandler::error(getLoc(), "Invalid variable type");
+        return;
+    }
     if (!variables_type->isComplete()) {
         ErrorHandler::error(getLoc(), "Variable declarations must have a complete type");
         return;
@@ -1161,6 +1866,46 @@ void Var::printNode(std::ostream& out) const {
     for(const auto& i : ids)
         out << i << ", ";
     out << "type: " << *type << " )";
+}
+
+unsigned Var::getSlotCount() const {
+    return static_cast<unsigned>(ids.size());
+}
+
+Value* Var::codegen() const {
+    llvm::Type* llvmType = type->getLLVMType();
+    if (!llvmType) return nullptr;
+
+    llvm::Function* function =
+        CodeGen::Builder->GetInsertBlock()->getParent();
+
+    llvm::Constant* initialValue =
+        llvm::Constant::getNullValue(llvmType);
+
+    for (const std::string& id : ids) {
+        if (function->getName() == "main") {
+            auto* variable = new llvm::GlobalVariable(
+                *CodeGen::TheModule,
+                llvmType,
+                false,
+                llvm::GlobalValue::InternalLinkage,
+                initialValue,
+                id);
+
+            CodeGen::backendST.insertValue(id, variable);
+        } else {
+            llvm::AllocaInst* variable =
+                CodeGen::CreateEntryBlockAlloca(
+                    function, llvmType, id);
+
+            CodeGen::Builder->CreateStore(
+                initialValue, variable);
+
+            CodeGen::backendST.insertValue(id, variable);
+        }
+    }
+
+    return nullptr;
 }
 
 /* ==================== LabelDef ==================== */
@@ -1184,6 +1929,23 @@ void LabelDef::printNode(std::ostream& out) const {
         first = false;
     }
     out << " )";
+}
+
+Value* LabelDef::codegen() const {
+    llvm::Function* function = CodeGen::Builder->GetInsertBlock()->getParent();
+
+    for (const std::string& id : ids) {
+        llvm::BasicBlock* block = llvm::BasicBlock::Create(
+            *CodeGen::TheContext, id, function);
+
+        // An unused label remains a valid, unreachable block.
+        llvm::IRBuilder<> placeholderBuilder(block);
+        placeholderBuilder.CreateUnreachable();
+
+        CodeGen::backendST.insertLabel(id, block);
+    }
+
+    return nullptr;
 }
 
 /* ==================== Formal ==================== */
@@ -1254,20 +2016,45 @@ void RoutineDef::sem_analyze() {
     std::string funcproc = (ret_type) ? "Function " : "Procedure ";
     bool is_forward = (body==nullptr);
 
-    if (ret_type!=nullptr && ret_type->getType()==PCLtype::Array) {
-        ErrorHandler::error(getLoc(), "Subprograms are not allowed to have \"array\" as a return type");
-        return;
-    }    
-    
-    std::vector<Parameter> parameters;
-    for (const auto& formal : header->getFormals()) {
-        for (size_t i = 0; i < formal->getIds().size(); ++i) {
-            parameters.push_back(Parameter(formal->isReference(), formal->getFormalsType()));
+    bool valid_signature = true;
+
+    if (ret_type != nullptr) {
+        if (!ret_type->isValid()) {
+            ErrorHandler::error(getLoc(), "Invalid function return type");
+            valid_signature = false;
+        } else if (ret_type->getType() == PCLtype::Array) {
+            ErrorHandler::error(
+                getLoc(),
+                "Subprograms are not allowed to have \"array\" as a return type"
+                );
+            valid_signature = false;
         }
     }
 
+    std::vector<Parameter> parameters;
+
+    for (const auto& formal : header->getFormals()) {
+        const Type* formal_type = formal->getFormalsType();
+
+        if (!formal_type->isValid()) {
+            ErrorHandler::error(formal->getLoc(), "Invalid parameter type");
+            valid_signature = false;
+        } else if (!formal->isReference() &&
+                   formal_type->getType() == PCLtype::Array) {
+            ErrorHandler::error(formal->getLoc(),
+                                "Arrays can only be passed by reference");
+            valid_signature = false;
+        }
+
+        for (size_t i = 0; i < formal->getIds().size(); ++i) {
+            parameters.push_back(Parameter(formal->isReference(), formal_type));
+        }
+    }
+
+    if (!valid_signature) return;
+
     RoutineName routine_name(is_forward, ret_type, parameters);
-    
+
     if (!symtab.insert(name, routine_name)) {
         SymTabEntry* prev_routine_name_entry = symtab.lookup(name);
         if (prev_routine_name_entry) {
@@ -1337,10 +2124,131 @@ void RoutineDef::printNode(std::ostream& out) const {
         : out << " [forward] )"; 
 }
 
+Value* RoutineDef::codegen() const {
+    const std::string& name = header->getName();
+    llvm::Function* parent = CodeGen::Builder->GetInsertBlock()->getParent();
+    
+    llvm::Type* returnType = header->getRetType()
+        ? header->getRetType()->getLLVMType()
+        : llvm::Type::getVoidTy(*CodeGen::TheContext);
+
+    std::vector<llvm::Type*> argumentTypes;
+    std::vector<std::string> argumentNames;
+
+    for (const auto& formal : header->getFormals()) {
+        llvm::Type* argumentType = formal->isReference()
+            ? CodeGen::ptr
+            : formal->getFormalsType()->getLLVMType();
+
+        for (const std::string& id : formal->getIds()) {
+            argumentTypes.push_back(argumentType);
+            argumentNames.push_back(id);
+        }
+    }
+    argumentTypes.push_back(CodeGen::ptr);
+
+    llvm::FunctionType* functionType =
+        llvm::FunctionType::get(returnType, argumentTypes, false);
+
+    llvm::Function* routine =
+        CodeGen::backendST.lookupProcCurrent(name);
+
+    if (!routine) {
+        routine = llvm::Function::Create(functionType,
+                                         llvm::Function::InternalLinkage,
+                                         name,
+                                         CodeGen::TheModule.get());
+        CodeGen::backendST.insertProc(name, routine);
+    } else if (routine->getFunctionType() != functionType) {
+        std::cerr << "Code generation: signature mismatch for '"
+                  << name << "'\n";
+        std::exit(1);
+    }
+
+    CodeGen::backendST.registerRoutine(routine, parent);
+
+    // A forward declaration creates only the signature.
+    if (!body) return nullptr;
+
+    if (!routine->empty()) {
+        std::cerr << "Code generation: duplicate body for '"
+                  << name << "'\n";
+        std::exit(1);
+    }
+
+    // Save the enclosing routine's insertion point first.
+    auto savedInsertionPoint = CodeGen::Builder->saveIP();
+
+    llvm::BasicBlock* entry = llvm::BasicBlock::Create(
+        *CodeGen::TheContext, "entry", routine);
+
+    CodeGen::Builder->SetInsertPoint(entry);
+    CodeGen::backendST.enterScope();
+
+    llvm::Argument* parentFrame =
+        routine->getArg(argumentNames.size());
+
+    parentFrame->setName("static.link");
+
+    unsigned frameSlots = 1+static_cast<unsigned>(argumentNames.size())+body->getLocalSlotCount()
+        + (header->getRetType() ? 1u : 0u);
+
+    CodeGen::backendST.createStackFrame(routine, parentFrame, frameSlots);
+    size_t i = 0;
+    for (auto& argument : routine->args()) {
+        if (i == argumentNames.size()) break;
+        argument.setName(argumentNames[i]);
+
+        llvm::AllocaInst* address =
+            CodeGen::CreateEntryBlockAlloca(routine,
+                                            argument.getType(),
+                                            argumentNames[i]);
+        CodeGen::Builder->CreateStore(&argument, address);
+        CodeGen::backendST.insertValue(
+            argumentNames[i], address);
+
+        ++i;
+    }
+
+    llvm::AllocaInst* resultAddress = nullptr;
+
+    if (header->getRetType()) {
+        resultAddress = CodeGen::CreateEntryBlockAlloca(
+            routine, returnType, "result");
+
+        CodeGen::Builder->CreateStore(
+            llvm::Constant::getNullValue(returnType),
+            resultAddress);
+
+        CodeGen::backendST.insertValue(
+            "%result", resultAddress);
+    }
+
+    body->codegen();
+
+    if (!CodeGen::Builder->GetInsertBlock()->getTerminator()) {
+        if (resultAddress) {
+            Value* result = CodeGen::Builder->CreateLoad(
+                returnType, resultAddress, "return.value");
+
+            CodeGen::Builder->CreateRet(result);
+        } else {
+            CodeGen::Builder->CreateRetVoid();
+        }
+    }
+
+    CodeGen::backendST.exitScope();
+    CodeGen::Builder->restoreIP(savedInsertionPoint);
+
+    return nullptr;
+}
+
 /* ==================== Program ==================== */
 
 void Program::sem_analyze() {
+    symtab.enterScope();
     if (body) body->sem_analyze();
+    symtab.exitScope();
 }
 
 void Program::printNode(std::ostream& out) const {
@@ -1355,16 +2263,20 @@ Value* Program::codegen() const {
 void Program::compile(const CompilerOptions& co) {
     CodeGen::initialize("PCL Program");
 
-    llvm::FunctionType *main_type = llvm::FunctionType::get(CodeGen::i32, {}, false);
+    llvm::FunctionType *main_type = llvm::FunctionType::get(CodeGen::i64, {}, false);
     llvm::Function *main = llvm::Function::Create(
         main_type, llvm::Function::ExternalLinkage, "main", CodeGen::TheModule.get());
 
     llvm::BasicBlock *BB = llvm::BasicBlock::Create(*CodeGen::TheContext, "entry", main);
     CodeGen::Builder->SetInsertPoint(BB);
 
+    CodeGen::backendST.registerRoutine(main, nullptr);
+    unsigned frameSlots = 1 + (body ? body->getLocalSlotCount() : 0);
+    CodeGen::backendST.createStackFrame(main, nullptr, frameSlots);
+    
     codegen(); 
     
-    CodeGen::Builder->CreateRet(CodeGen::c32(0));
+    CodeGen::Builder->CreateRet(CodeGen::c64(0));
 
     if (llvm::verifyModule(*CodeGen::TheModule, &llvm::errs())) {
         std::cerr << "Error: The generated LLVM IR is invalid!" << std::endl;

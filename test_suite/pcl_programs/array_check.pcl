@@ -1,0 +1,5 @@
+program badsize;
+var p: ^array of integer;
+begin
+    new [missing] p
+end.

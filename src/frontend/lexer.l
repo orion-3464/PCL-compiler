@@ -122,7 +122,7 @@ loc.step();
 {D}+\.{D}+([eE][\+\-]?{D}+)?    { std::string s(yytext);
                                   return yy::parser::make_re(std::stod(s), loc);
                                 }
-'([^\'\\]|{ESC})'               { return yy::parser::make_cchar(yytext[1], loc); }
+'([^\'\\]|{ESC})'               { return yy::parser::make_cchar(process_string(yytext).at(0), loc); }
 \"([^\"\\\n]|{ESC})*\"          { return yy::parser::make_str(process_string(yytext), loc); }
 \"([^\"\\\n]|{ESC})*            { std::cerr << "\033[91mError: Unterminated string\033[0m"
                                             << std::endl;

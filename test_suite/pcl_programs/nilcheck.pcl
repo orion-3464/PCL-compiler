@@ -1,0 +1,7 @@
+program nilcheck;
+var p: ^integer;
+begin
+    if p = nil then begin end;
+    if nil <> p then begin end;
+    if nil = nil then begin end
+end.

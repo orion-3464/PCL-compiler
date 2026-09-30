@@ -5,11 +5,13 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <string.h>
+#include <inttypes.h>
 
 #define STDIN 0
 #define STDOUT 1
 
-typedef int32_t integer;
+typedef int64_t integer;
 typedef bool boolean;
 typedef double real;
 

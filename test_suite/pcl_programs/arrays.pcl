@@ -1,0 +1,11 @@
+program arrays;
+procedure p(var dst, src: array of integer);
+begin
+    dst := src
+end;
+procedure f(var a, b: array[3] of integer);
+begin
+    a := b
+end;
+begin
+end.

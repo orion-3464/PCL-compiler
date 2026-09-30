@@ -40,7 +40,7 @@ namespace CodeGen {
     BackendSymbolTable backendST;
     
     llvm::Type* i8 = nullptr;
-    llvm::Type* i32 = nullptr;
+    llvm::Type* i64 = nullptr;
     llvm::Type* r64 = nullptr;
     llvm::PointerType* ptr = nullptr;
 
@@ -68,9 +68,12 @@ namespace CodeGen {
     llvm::Function *TheRound = nullptr;
     llvm::Function *TheOrd = nullptr;
     llvm::Function *TheChr = nullptr;
+
+    llvm::Function* TheMalloc = nullptr;
+    llvm::Function* TheFree = nullptr;
     
-    llvm::ConstantInt* c32(int n) {
-        return llvm::ConstantInt::get(*TheContext, llvm::APInt(32, n, true));
+    llvm::ConstantInt* c64(std::int64_t n) {
+        return llvm::ConstantInt::get(*TheContext, llvm::APInt(64, n, true));
     }
     
     llvm::ConstantFP* f64(double d) {
@@ -80,7 +83,7 @@ namespace CodeGen {
     void declareLibFunctions() {
         // IO
         llvm::FunctionType *procIntArgType =
-            llvm::FunctionType::get(llvm::Type::getVoidTy(*TheContext), {i32}, false);
+            llvm::FunctionType::get(llvm::Type::getVoidTy(*TheContext), {i64}, false);
         llvm::FunctionType *procByteArgType =
             llvm::FunctionType::get(llvm::Type::getVoidTy(*TheContext), {i8}, false);
         llvm::FunctionType *procRealArgType =
@@ -106,12 +109,12 @@ namespace CodeGen {
 
 
         llvm::FunctionType *funcIntResType =
-            llvm::FunctionType::get(i32, {}, false);
+            llvm::FunctionType::get(i64, {}, false);
         llvm::FunctionType *funcByteResType =
             llvm::FunctionType::get(i8, {}, false);
         llvm::FunctionType *funcRealResType =
             llvm::FunctionType::get(r64, {}, false);
-        std::vector<llvm::Type*> IntCharArrayRef = {i32, ptr};
+        std::vector<llvm::Type*> IntCharArrayRef = {i64, ptr};
         llvm::FunctionType *procIntStringRefType =
             llvm::FunctionType::get(llvm::Type::getVoidTy(*TheContext),
                                    IntCharArrayRef, false);
@@ -134,11 +137,11 @@ namespace CodeGen {
 
         // Math
         llvm::FunctionType *funcIntResIntArgType =
-            llvm::FunctionType::get(i32, {i32}, false);
+            llvm::FunctionType::get(i64, {i64}, false);
         llvm::FunctionType *funcRealResRealArg =
             llvm::FunctionType::get(r64, {r64}, false);
         llvm::FunctionType *funcIntResRealArgType =
-            llvm::FunctionType::get(i32, {r64}, false);
+            llvm::FunctionType::get(i64, {r64}, false);
 
         TheAbs =
             llvm::Function::Create(funcIntResIntArgType, llvm::Function::ExternalLinkage,
@@ -178,9 +181,9 @@ namespace CodeGen {
                                   "round", TheModule.get());
        // Conversion
        llvm::FunctionType *funcIntResByteArgType =
-            llvm::FunctionType::get(i32, {i8}, false);
+            llvm::FunctionType::get(i64, {i8}, false);
        llvm::FunctionType *funcByteResIntArgType =
-           llvm::FunctionType::get(i8, {i32}, false);
+           llvm::FunctionType::get(i8, {i64}, false);
 
        TheOrd =
            llvm::Function::Create(funcIntResByteArgType, llvm::Function::ExternalLinkage,
@@ -189,9 +192,26 @@ namespace CodeGen {
        TheChr =
            llvm::Function::Create(funcByteResIntArgType, llvm::Function::ExternalLinkage,
                                   "chr", TheModule.get());
+
+       llvm::Type* sizeType = llvm::Type::getInt64Ty(*TheContext);
+
+       TheMalloc = llvm::Function::Create(
+           llvm::FunctionType::get(ptr, {sizeType}, false),
+           llvm::Function::ExternalLinkage,
+           "malloc",
+           TheModule.get());
+
+       TheFree = llvm::Function::Create(
+           llvm::FunctionType::get(
+               llvm::Type::getVoidTy(*TheContext), {ptr}, false),
+           llvm::Function::ExternalLinkage,
+           "free",
+           TheModule.get());
     }
     
     void initialize(const std::string& module_name) {
+        backendST = BackendSymbolTable();
+        
         TheContext = std::make_unique<llvm::LLVMContext>();
         TheModule = std::make_unique<llvm::Module>(module_name, *TheContext);
         Builder = std::make_unique<llvm::IRBuilder<>>(*TheContext);
@@ -206,7 +226,7 @@ namespace CodeGen {
         TheSI->registerCallbacks(*ThePIC, TheMAM.get());
         
         i8  = llvm::IntegerType::get(*TheContext, 8);
-        i32 = llvm::IntegerType::get(*TheContext, 32);
+        i64 = llvm::IntegerType::get(*TheContext, 64);
         r64 = llvm::Type::getDoubleTy(*TheContext);
         ptr = llvm::PointerType::getUnqual(*TheContext);
 
@@ -281,7 +301,7 @@ namespace CodeGen {
         std::filesystem::path p = co.filename;
         p.replace_extension(".asm");
         std::string asm_filename = p.string();
-        std::string exec_name = co.ex_name.empty() ? (p.parent_path() / "a.out").string() : co.ex_name;
+        std::string exec_name = co.ex_name.empty() ? "./a.out" : co.ex_name;
         
         std::string cmd = "gcc -no-pie -x assembler " + asm_filename + " -x none build/libpcl.a -lm -o " + exec_name;
         if (std::system(cmd.c_str())) {
@@ -322,22 +342,224 @@ namespace CodeGen {
     }
 
     void BackendSymbolTable::enterScope() {
-        NamedValues.push_back({});
+        NamedValues.emplace_back();
+        NamedLabels.emplace_back();
+        NamedProcs.emplace_back();
     }
 
     void BackendSymbolTable::exitScope() {
         NamedValues.pop_back();
+        NamedLabels.pop_back();
+        NamedProcs.pop_back();
     }
 
-    void BackendSymbolTable::insert(const std::string& name, llvm::AllocaInst* inst) {
-        NamedValues.back()[name] = inst;
+    void BackendSymbolTable::insertValue(
+        const std::string& name, llvm::Value* value) {
+
+        NamedValues.back()[name] = value;
+        auto* local = llvm::dyn_cast<llvm::AllocaInst>(value);
+        if (!local) return;
+
+        llvm::Function* owner =
+            local->getParent()->getParent();
+
+        auto found = Frames.find(owner);
+
+        if (found == Frames.end() || !found->second.address) {
+            std::cerr << "Code generation: missing variable frame\n";
+            std::exit(1);
+        }
+
+        if (FrameSlots.find(value) != FrameSlots.end())
+            return;
+
+        FrameInfo& frame = found->second;
+
+        if (frame.nextSlot >= frame.slotCount) {
+            std::cerr << "Code generation: stack frame is too small\n";
+            std::exit(1);
+        }
+
+        unsigned index = frame.nextSlot++;
+        FrameSlots[value] = index;
+
+        llvm::Value* slot = Builder->CreateInBoundsGEP(
+            ptr, frame.address, {c64(index)}, "frame.slot");
+
+        Builder->CreateStore(value, slot);
     }
-    
-    llvm::AllocaInst* BackendSymbolTable::lookup(const std::string& name) const {
-        for (auto nv = NamedValues.rbegin(); nv != NamedValues.rend(); ++nv) {
-            auto symbol = nv->find(name);
-            if (symbol!=nv->end()) return symbol->second;
+
+    void BackendSymbolTable::insertLabel(
+        const std::string& name, llvm::BasicBlock* label) {
+        NamedLabels.back()[name] = label;
+    }
+
+    void BackendSymbolTable::insertProc(
+        const std::string& name, llvm::Function* function) {
+        NamedProcs.back()[name] = function;
+    }
+
+    llvm::Value* BackendSymbolTable::lookupValue(
+        const std::string& name) const {
+
+        for (auto scope = NamedValues.rbegin();
+             scope != NamedValues.rend(); ++scope) {
+
+            auto found = scope->find(name);
+            if (found == scope->end())
+                continue;
+
+            llvm::Value* value = found->second;
+            auto* local = llvm::dyn_cast<llvm::AllocaInst>(value);
+
+            if (!local)
+                return value;
+
+            llvm::Function* owner =
+                local->getParent()->getParent();
+
+            llvm::Function* current =
+                Builder->GetInsertBlock()->getParent();
+
+            if (owner == current)
+                return value;
+
+            auto index = FrameSlots.find(value);
+
+            if (index == FrameSlots.end()) {
+                std::cerr << "Code generation: captured variable has no frame slot\n";
+                std::exit(1);
+            }
+
+            llvm::Value* frame = frameFor(owner);
+            llvm::Value* slot = Builder->CreateInBoundsGEP(
+                ptr, frame, {c64(index->second)}, "captured.slot");
+
+            return Builder->CreateLoad(
+                ptr, slot, name + ".captured.address");
+        }
+
+        return nullptr;
+    }
+
+    llvm::BasicBlock* BackendSymbolTable::lookupLabel(
+        const std::string& name) const {
+        for (auto scope = NamedLabels.rbegin();
+             scope != NamedLabels.rend(); ++scope) {
+            auto found = scope->find(name);
+            if (found != scope->end())
+                return found->second;
         }
         return nullptr;
+    }
+
+    llvm::Function* BackendSymbolTable::lookupProc(
+        const std::string& name) const {
+        for (auto scope = NamedProcs.rbegin();
+             scope != NamedProcs.rend(); ++scope) {
+            auto found = scope->find(name);
+            if (found != scope->end())
+                return found->second;
+        }
+        return nullptr;
+    }
+
+    llvm::Function* BackendSymbolTable::lookupProcCurrent(
+        const std::string& name) const {
+        if (NamedProcs.empty()) return nullptr;
+        auto found = NamedProcs.back().find(name);
+        return found == NamedProcs.back().end()
+            ? nullptr
+            : found->second;
+    }
+
+    llvm::AllocaInst* CreateEntryBlockAlloca(
+        llvm::Function* function,
+        llvm::Type* llvmType,
+        const std::string& variableName) {
+
+        llvm::IRBuilder<> entryBuilder(
+            &function->getEntryBlock(),
+            function->getEntryBlock().begin());
+
+        return entryBuilder.CreateAlloca(
+            llvmType, nullptr, variableName);
+    }
+
+    void BackendSymbolTable::registerRoutine(
+        llvm::Function* routine,
+        llvm::Function* parent) {
+
+        Frames[routine].parent = parent;
+    }
+
+    bool BackendSymbolTable::hasStaticLink(
+        llvm::Function* routine) const {
+        auto found = Frames.find(routine);
+        return found != Frames.end() &&
+            found->second.parent != nullptr;
+    }
+
+    void BackendSymbolTable::createStackFrame(
+        llvm::Function* routine,
+        llvm::Value* parentFrame,
+        unsigned slotCount) {
+
+        if (slotCount == 0) {
+            std::cerr << "Code generation: empty stack frame\n";
+            std::exit(1);
+        }
+
+        FrameInfo& info = Frames.at(routine);
+
+        llvm::Type* frameType = llvm::ArrayType::get(ptr, slotCount);
+
+        info.address = CreateEntryBlockAlloca(routine, frameType, "stack.frame");
+
+        info.slotCount = slotCount;
+        info.nextSlot = 1;
+
+        if (!parentFrame)
+            parentFrame = llvm::ConstantPointerNull::get(ptr);
+
+        Builder->CreateStore(parentFrame, info.address);
+    }
+
+    llvm::Value* BackendSymbolTable::frameFor(
+        llvm::Function* owner) const {
+
+        llvm::Function* current =
+            Builder->GetInsertBlock()->getParent();
+
+        auto found = Frames.find(current);
+
+        if (found == Frames.end() || !found->second.address) {
+            std::cerr << "Code generation: missing current stack frame\n";
+            std::exit(1);
+        }
+
+        llvm::Value* frame = found->second.address;
+
+        while (current != owner) {
+            auto info = Frames.find(current);
+
+            if (info == Frames.end() || !info->second.parent) {
+                std::cerr << "Code generation: enclosing stack frame not found\n";
+                std::exit(1);
+            }
+
+            frame = Builder->CreateLoad(ptr, frame, "parent.frame");
+            current = info->second.parent;
+        }
+
+        return frame;
+    }
+
+    llvm::Value* BackendSymbolTable::staticLinkFor(llvm::Function* callee) const {
+        auto found = Frames.find(callee);
+        if (found == Frames.end() || !found->second.parent)
+            return nullptr;
+
+        return frameFor(found->second.parent);
     }
 }

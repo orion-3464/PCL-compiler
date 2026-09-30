@@ -36,7 +36,7 @@ struct RoutineName {
 
 struct Label {
     bool is_defined;
-
+    bool is_used = false;
     Label() = default;
     Label(bool d) : is_defined(d) {}
 };

@@ -74,7 +74,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "Warning: Parsing succeeded, but AST is null." << std::endl;
         return 1;
     }
-    
+
     if (ErrorHandler::getErrorCount() == 0) {
         //std::cout << "Semantic analysis completed successfully!" << std::endl;
         programAST->compile(co);
@@ -84,4 +84,5 @@ int main(int argc, char* argv[]) {
                   << ErrorHandler::getErrorCount() << " errors." << std::endl;
         return 1;
     }
+    
 }

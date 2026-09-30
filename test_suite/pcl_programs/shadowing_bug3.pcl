@@ -1,0 +1,10 @@
+program shadowing3;
+
+procedure p (x : integer);
+begin
+    x := 1
+end;
+
+begin
+    p(2)
+end.

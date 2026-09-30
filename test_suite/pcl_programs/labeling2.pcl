@@ -1,0 +1,12 @@
+program labeling2;
+label L;
+
+procedure p ();
+label L;
+begin
+    L: return
+end;
+
+begin
+    L: return
+end.

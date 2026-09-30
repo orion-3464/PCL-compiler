@@ -74,11 +74,13 @@ public:
     virtual bool isComposite() const = 0;
     virtual bool isComplete() const = 0;
     virtual bool isArithmetic() const = 0;
+    virtual bool isValid() const = 0;
     virtual PCLtype inferType() const = 0;
     virtual PCLtype getType() const = 0;
     virtual std::unique_ptr<Type> cloneType() const = 0;
     virtual bool isSame(const Type* other) const = 0; // mainly for args
     virtual bool isCompatible(const Type* other) const = 0; // mainly for asgn
+    virtual llvm::Type* getLLVMType() const = 0;
 protected:
     PCLtype type;
 };
@@ -92,12 +94,14 @@ public:
     bool isComposite() const override;
     bool isComplete() const override;
     bool isArithmetic() const override;
+    bool isValid() const override;
     PCLtype inferType() const override;
     PCLtype getType() const override;
     std::unique_ptr<Type> cloneType() const override;
     bool isSame(const Type* other) const override;
     bool isCompatible(const Type* other) const override;
     void printNode(std::ostream& out) const override;
+    llvm::Type* getLLVMType() const override;
 };
 
 class ArrayType : public Type {
@@ -118,12 +122,14 @@ public:
     bool isComposite() const override;
     bool isComplete() const override;
     bool isArithmetic() const override;
+    bool isValid() const override;    
     PCLtype inferType() const override;
     PCLtype getType() const override;
     std::unique_ptr<Type> cloneType() const override;
     bool isSame(const Type* other) const override;
     bool isCompatible(const Type* other) const override;
     void printNode(std::ostream& out) const override;
+    llvm::Type* getLLVMType() const override;
 private:
     int size; // Negative for incomplete types
     std::unique_ptr<Type> element_type;
@@ -146,12 +152,14 @@ public:
     bool isComposite() const override;
     bool isComplete() const override;
     bool isArithmetic() const override;
+    bool isValid() const override;    
     PCLtype inferType() const override;
     PCLtype getType() const override;
     std::unique_ptr<Type> cloneType() const override;
     bool isSame(const Type* other) const override;
     bool isCompatible(const Type* other) const override;
     void printNode(std::ostream& out) const override;
+    llvm::Type* getLLVMType() const override;
 private:
     std::unique_ptr<Type> target;
     PCLtype type = PCLtype::Pointer;
@@ -177,6 +185,7 @@ protected:
 class Lvalue : public Expr {
 public:
     Lvalue(Loc l) : Expr(l) {}
+    virtual llvm::Value* generateStackAddress() const = 0;
 };
 
 class Rvalue : public Expr {
@@ -211,6 +220,7 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override;
 private:
     std::unique_ptr<Expr> lval;
     std::unique_ptr<Expr> e;
@@ -226,6 +236,7 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override;
 private:
     std::unique_ptr<Expr> cond;
     std::unique_ptr<Stmt> then_stmt;
@@ -239,6 +250,7 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override;
 private:
     std::unique_ptr<Expr> cond;
     std::unique_ptr<Stmt> loop;
@@ -251,6 +263,7 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override;
 private:
     std::string label;
     std::unique_ptr<Stmt> code;
@@ -262,6 +275,7 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override;
 private:
     std::string label;
 };
@@ -271,6 +285,7 @@ public:
     Return(Loc l) : Stmt(l) {}
 
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override;
 };
 
 class New : public Stmt {
@@ -280,6 +295,7 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override;
 private:
     std::unique_ptr<Expr> size;
     std::unique_ptr<Expr> lvl;
@@ -292,6 +308,7 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override;
 private:
     bool brackets;
     std::unique_ptr<Expr> lvl;
@@ -302,9 +319,12 @@ public:
     Id(std::string n, Loc l) : Lvalue(l), name(n) {}
 
     void sem_analyze() override;
+    llvm::Value* generateStackAddress() const override;
+    Value* codegen() const override;
     void printNode(std::ostream& out) const override;
 private:
     std::string name;
+    bool is_ref = false;
 };
 
 class Result : public Lvalue {
@@ -312,6 +332,8 @@ public:
     Result(Loc l) : Lvalue(l) {}
 
     void sem_analyze() override;
+    llvm::Value* generateStackAddress() const override;
+    Value* codegen() const override;
     void printNode(std::ostream& out) const override;
 };
 
@@ -321,6 +343,7 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* generateStackAddress() const override;
     Value* codegen() const override;
 private:
     std::string value;
@@ -332,6 +355,8 @@ public:
         : Lvalue(l), array_base(std::move(a)), index(std::move(idx)) {}
 
     void sem_analyze() override;
+    llvm::Value* generateStackAddress() const override;
+    Value* codegen() const override;
     void printNode(std::ostream& out) const override;
 private:
     std::unique_ptr<Expr> array_base;
@@ -344,6 +369,8 @@ public:
         : Lvalue(l), pointer(std::move(p)) {}
 
     void sem_analyze() override;
+    llvm::Value* generateStackAddress() const override;
+    Value* codegen() const override;
     void printNode(std::ostream& out) const override;
 private:
     std::unique_ptr<Expr> pointer;
@@ -475,6 +502,7 @@ public:
 private:
     std::string name;
     std::vector<std::unique_ptr<Expr>> args;
+    std::vector<bool> is_ref_args;
 };
 
 class CallFunc : public Rvalue {
@@ -485,9 +513,11 @@ public:
 
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override;
 private:
     std::string name;
     std::vector<std::unique_ptr<Expr>> args;
+    std::vector<bool> is_ref_args;
 };
 
 class Local : public AST {
@@ -502,6 +532,7 @@ public:
          Loc l)
         : AST(l), locals(std::move(locs)), block(std::move(blk)) {}
 
+    unsigned getLocalSlotCount() const;
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
 
@@ -517,8 +548,10 @@ public:
         std::unique_ptr<Type> t,
         Loc l) : Local(l), type(std::move(t)) { ids = i; }
 
+    unsigned getSlotCount() const;
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override;
 private:
     std::unique_ptr<Type> type;
     std::vector<std::string> ids;
@@ -532,6 +565,7 @@ public:
     const std::vector<std::string>& getIds() const;
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override;
 private:
     std::vector<std::string> ids;
 };
@@ -584,6 +618,7 @@ public:
     
     void sem_analyze() override;
     void printNode(std::ostream& out) const override;
+    Value* codegen() const override;
 private:
     std::unique_ptr<Header> header;
     std::unique_ptr<Body> body; 

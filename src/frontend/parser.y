@@ -10,7 +10,8 @@
     #include <memory>
     #include <vector>
     #include <utility>
-
+    #include <limits>
+        
     // yynerrs_ unused but it is ok
     #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 }
@@ -212,7 +213,16 @@ type:
 
 size:
     %empty { $$ = -1; }
-|   '[' cint ']' { $$ = $2; }
+|   '[' cint ']' {
+        const unsigned long length = $2;
+
+        if (length > static_cast<unsigned long>(
+                     std::numeric_limits<int>::max())) {
+            $$ = 0;
+        } else {
+            $$ = static_cast<int>(length);
+        }
+    }
 ;
 
 block:

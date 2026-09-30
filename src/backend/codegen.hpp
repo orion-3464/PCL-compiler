@@ -22,6 +22,7 @@
 #include <map>
 #include <memory>
 #include <vector>
+#include <cstdint>
 
 struct CompilerOptions;
 
@@ -39,7 +40,7 @@ namespace CodeGen {
     extern std::unique_ptr<llvm::StandardInstrumentations> TheSI;
 
     extern llvm::Type *i8;
-    extern llvm::Type *i32;
+    extern llvm::Type *i64;
     extern llvm::Type *r64;
     extern llvm::PointerType* ptr;
 
@@ -67,30 +68,67 @@ namespace CodeGen {
     extern llvm::Function *TheRound;
     extern llvm::Function *TheOrd;
     extern llvm::Function *TheChr;
+
+    extern llvm::Function* TheMalloc;
+    extern llvm::Function* TheFree;
     
-    llvm::ConstantInt* c32(int n);
+    llvm::ConstantInt* c64(std::int64_t n);
     llvm::ConstantFP* f64(double d);
 
     void declareLibFunctions();
     void initialize(const std::string& module_name);
     void generateOutput(const CompilerOptions& co);
     void optimize();
-
+   
     class BackendSymbolTable {
     public:
         BackendSymbolTable() = default;
 
         void enterScope();
         void exitScope();
-        void insert(const std::string& name, llvm::AllocaInst* inst);
-        llvm::AllocaInst* lookup(const std::string& name) const;
+
+        // TODO:: Type templates for more elegant C++
+        void insertValue(const std::string& name, llvm::Value* inst);
+        void insertLabel(const std::string& name, llvm::BasicBlock* label);
+        void insertProc(const std::string& name, llvm::Function* func);
+        
+        llvm::Value* lookupValue(const std::string& name) const;
+        llvm::BasicBlock* lookupLabel(const std::string& name) const;
+        llvm::Function* lookupProc(const std::string& name) const;
+        llvm::Function* lookupProcCurrent(const std::string& name) const;
+
+        void registerRoutine(llvm::Function* routine, llvm::Function* parent);
+
+        bool hasStaticLink(llvm::Function* routine) const;
+
+        void createStackFrame(llvm::Function* routine, llvm::Value* parentFrame,
+                              unsigned slotCount);
+
+        llvm::Value* staticLinkFor(llvm::Function* callee) const;
     private:
         // Kaleidoscope suggests only map.
         // We add a stack on top to handle scoping
-        std::vector<std::map<std::string, llvm::AllocaInst*>> NamedValues;
+        std::vector<std::map<std::string, llvm::Value*>> NamedValues;
+        std::vector<std::map<std::string, llvm::BasicBlock*>> NamedLabels;
+        std::vector<std::map<std::string, llvm::Function*>> NamedProcs;
+
+        struct FrameInfo {
+            llvm::Function* parent = nullptr;
+            llvm::Value* address = nullptr;
+            unsigned slotCount = 0;
+            unsigned nextSlot = 1;
+        };
+
+        std::map<llvm::Function*, FrameInfo> Frames;
+        std::map<llvm::Value*, unsigned> FrameSlots;
+
+        llvm::Value* frameFor(llvm::Function* owner) const;
     };
 
     extern BackendSymbolTable backendST;
+
+    llvm::AllocaInst *CreateEntryBlockAlloca(llvm::Function *TheFunction, llvm::Type* LLVMType,
+                                             const std::string& VarName);
 }
 
 #endif
